@@ -1,0 +1,34 @@
+name: Nightly Price Scrape
+
+on:
+  schedule:
+    # Run at 6am UTC daily (after PriceCharting updates at ~8am EST / 1pm UTC)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720  # 12 hour max (large card sets)
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run scraper (daily prices only)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python pokeprices_scraper_v5.py
+
+      - name: Summary
+        if: always()
+        run: echo "Scrape completed at $(date -u)"
