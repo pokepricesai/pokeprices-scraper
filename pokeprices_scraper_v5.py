@@ -274,7 +274,7 @@ def push_batch_to_supabase(records):
     if not records:
         return True
 
-    url = f"{SUPABASE_URL}/rest/v1/daily_prices"
+    url = f"{SUPABASE_URL}/rest/v1/daily_prices?on_conflict=card_slug,date,source"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
