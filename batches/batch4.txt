@@ -1,40 +1,26 @@
-Pokemon BREAKpoint
-Pokemon Black Bolt
-Pokemon Celebrations
-Pokemon Celestial Storm
-Pokemon Champion's Path
-Pokemon Chilling Reign
-Pokemon Crimson Invasion
-Pokemon Dark Explorers
-Pokemon Destined Rivals
-Pokemon Detective Pikachu
-Pokemon Dragon Vault
-Pokemon Emerging Powers
-Pokemon Fossil
-Pokemon Fusion Strike
-Pokemon Generations
-Pokemon Gym Heroes
-Pokemon Hidden Legends
-Pokemon Jungle
-Pokemon Legendary Treasures
-Pokemon Legends Awakened
-Pokemon McDonalds 2018
-Pokemon McDonalds 2021
-Pokemon McDonalds 2023
-Pokemon POP Series 3
-Pokemon Paldean Fates
-Pokemon Plasma Blast
-Pokemon Plasma Freeze
-Pokemon Power Keepers
-Pokemon Scarlet & Violet
-Pokemon Shining Fates
-Pokemon Shrouded Fable
-Pokemon Southern Islands
-Pokemon Steam Siege
-Pokemon Stormfront
-Pokemon Sun & Moon
-Pokemon Sword & Shield
-Pokemon Temporal Forces
-Pokemon Twilight Masquerade
-Pokemon Ultra Prism
-Pokemon XY
+Pokemon Aquapolis
+Pokemon BREAKthrough
+Pokemon Base Set
+Pokemon Brilliant Stars
+Pokemon Cosmic Eclipse
+Pokemon Evolutions
+Pokemon Evolving Skies
+Pokemon Fire Red & Leaf Green
+Pokemon Flashfire
+Pokemon Hidden Fates
+Pokemon Journey Together
+Pokemon Legend Maker
+Pokemon Majestic Dawn
+Pokemon McDonalds 2016
+Pokemon McDonalds 2022
+Pokemon Mega Evolution
+Pokemon Mysterious Treasures
+Pokemon Neo Destiny
+Pokemon Next Destinies
+Pokemon POP Series 1
+Pokemon POP Series 5
+Pokemon Paldea Evolved
+Pokemon Paradox Rift
+Pokemon Phantasmal Flames
+Pokemon Plasma Storm
+Pokemon Sandstorm

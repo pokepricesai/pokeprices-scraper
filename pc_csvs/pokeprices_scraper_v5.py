@@ -50,11 +50,18 @@ from datetime import datetime, timezone
 # CONFIGURATION
 # ============================================
 
-SUPABASE_URL = "https://egidpsrkqvymvioidatc.supabase.co"
-SUPABASE_KEY = "sb_secret_sVRvuUKAnzB3TnOsIUx5xg_5S6c_dR7"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://egidpsrkqvymvioidatc.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_secret_sVRvuUKAnzB3TnOsIUx5xg_5S6c_dR7")
 
 # Folder containing PriceCharting CSV downloads
-PC_CSV_FOLDER = r"C:\Users\lukep\OneDrive\Desktop\pokeprices\pc_csvs"
+# CSV folder: check local path first, then repo-relative path (GitHub Actions)
+LOCAL_CSV_FOLDER = r"C:\Users\lukep\OneDrive\Desktop\pokeprices\pc_csvs"
+REPO_CSV_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pc_csvs")
+
+if os.path.exists(LOCAL_CSV_FOLDER):
+    PC_CSV_FOLDER = LOCAL_CSV_FOLDER
+else:
+    PC_CSV_FOLDER = REPO_CSV_FOLDER
 
 # Price field mappings (verified from Alakazam Base Set page source)
 CHART_SERIES_TO_FIELD = {
@@ -165,8 +172,8 @@ def build_url(console_name, product_name):
     slug = product_name.lower()
     slug = slug.replace("[", "").replace("]", "")
     slug = slug.replace("#", "")
-    slug = slug.replace("'", "")
-    slug = re.sub(r'[^a-z0-9\s.&-]', '', slug)
+    # Keep apostrophes - PriceCharting uses them in URLs (e.g. farfetch'd-27)
+    slug = re.sub(r"[^a-z0-9\s.&'-]", '', slug)
     slug = slug.strip()
     slug = re.sub(r'\s+', '-', slug)
     slug = re.sub(r'-+', '-', slug)
@@ -267,7 +274,7 @@ def push_batch_to_supabase(records):
     if not records:
         return True
 
-    url = f"{SUPABASE_URL}/rest/v1/daily_prices"
+    url = f"{SUPABASE_URL}/rest/v1/daily_prices?on_conflict=card_slug,date,source"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -306,8 +313,7 @@ def main():
             set_filter = sys.argv[idx + 1]
     
     # Load cards from PriceCharting CSVs
-    csv_folder = os.path.join(os.getcwd(), PC_CSV_FOLDER)
-    cards = load_cards_from_pc_csvs(csv_folder, set_filter=set_filter)
+    cards = load_cards_from_pc_csvs(PC_CSV_FOLDER, set_filter=set_filter)
     
     if not cards:
         print("No cards found. Check your CSV files and set filter.")
