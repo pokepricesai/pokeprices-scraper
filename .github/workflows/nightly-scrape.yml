@@ -2,20 +2,18 @@ name: Nightly Scrape
 
 on:
   schedule:
-    # Run at 3am UTC daily (after PriceCharting updates)
     - cron: '0 3 * * *'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_KEY }}
 
 jobs:
-  # ── 4 parallel batch jobs ─────────────────────────────────────────────────
+  # —— 6 parallel batch scrape jobs ——————————————————————————————————
   batch1:
     runs-on: ubuntu-latest
-    timeout-minutes: 300  # 5 hours max
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 1
-        run: python pokeprices_scraper_v6.py --sets-file batches/batch1.txt
+        run: python pokeprices_scraper_v7.py --sets-file batches/batch1.txt
 
   batch2:
     runs-on: ubuntu-latest
@@ -37,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 2
-        run: python pokeprices_scraper_v6.py --sets-file batches/batch2.txt
+        run: python pokeprices_scraper_v7.py --sets-file batches/batch2.txt
 
   batch3:
     runs-on: ubuntu-latest
@@ -50,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 3
-        run: python pokeprices_scraper_v6.py --sets-file batches/batch3.txt
+        run: python pokeprices_scraper_v7.py --sets-file batches/batch3.txt
 
   batch4:
     runs-on: ubuntu-latest
@@ -63,13 +61,38 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 4
-        run: python pokeprices_scraper_v6.py --sets-file batches/batch4.txt
+        run: python pokeprices_scraper_v7.py --sets-file batches/batch4.txt
 
-  # ── Refresh card_trends + analytics after all batches complete ─────────────
-  refresh-trends:
+  batch5:
     runs-on: ubuntu-latest
-    needs: [batch1, batch2, batch3, batch4]
-    timeout-minutes: 60
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+      - name: Run batch 5
+        run: python pokeprices_scraper_v7.py --sets-file batches/batch5.txt
+
+  batch6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+      - name: Run batch 6
+        run: python pokeprices_scraper_v7.py --sets-file batches/batch6.txt
+
+  # —— eBay API scraper (runs in parallel with batches) ———————————————
+  ebay-scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -77,82 +100,82 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install requests
-      - name: Refresh card_trends table
+      - name: Run eBay scraper
+        env:
+          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+          EBAY_CERT_ID: ${{ secrets.EBAY_CERT_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python ebay_scraper.py
+
+  # —— Detect deals (runs after scrapers + analytics) ————————————————
+  detect-deals:
+    runs-on: ubuntu-latest
+    needs: [refresh-and-analytics]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Detect deals
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python detect_deals.py
+
+  # —— Refresh card_trends + compute analytics ———————————————————————
+  refresh-and-analytics:
+    runs-on: ubuntu-latest
+    needs: [batch1, batch2, batch3, batch4, batch5, batch6, ebay-scrape]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Refresh card_trends
         run: |
-          # Step 1: Find the actual reference dates in the data
-          echo "Finding reference dates..."
-
-          DATES_RESPONSE=$(curl -s -X POST \
-            "${SUPABASE_URL}/rest/v1/rpc/get_trend_dates" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Content-Type: application/json" \
-            -d '{}')
-
-          echo "Dates response: ${DATES_RESPONSE}"
-
-          # If the RPC function doesn't exist, use a raw SQL approach via REST
-          # We'll use the simpler approach: call the refresh via a purpose-built function
-
-          # Step 2: Truncate and repopulate card_trends
-          # This calls a lightweight Supabase function that does the refresh in chunks
-          echo "Refreshing card_trends..."
-
-          REFRESH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "${SUPABASE_URL}/rest/v1/rpc/refresh_card_trends_v2" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Content-Type: application/json" \
-            -d '{}')
-
-          HTTP_CODE=$(echo "$REFRESH_RESPONSE" | tail -1)
-          BODY=$(echo "$REFRESH_RESPONSE" | head -n -1)
-
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "card_trends refreshed successfully"
-          else
-            echo "WARNING: card_trends refresh returned HTTP ${HTTP_CODE}"
-            echo "Response: ${BODY}"
-            echo ""
-            echo "Falling back to Python-based refresh..."
-            # Fall back to Python script that does it in chunks
-            pip install requests
-            python3 - <<'PYTHON_EOF'
+          python3 << 'PYEOF'
           import os, requests, json
           from datetime import date, timedelta
 
           SUPABASE_URL = os.environ["SUPABASE_URL"]
-          SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-          GET_HEADERS = {
+          SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+          HEADERS = {
               "apikey": SUPABASE_KEY,
               "Authorization": f"Bearer {SUPABASE_KEY}",
               "Content-Type": "application/json",
           }
-          POST_HEADERS = {
-              "apikey": SUPABASE_KEY,
-              "Authorization": f"Bearer {SUPABASE_KEY}",
-              "Content-Type": "application/json",
-              "Prefer": "return=minimal",
-          }
+          POST_HEADERS = {**HEADERS, "Prefer": "return=minimal"}
 
-          today = date.today().isoformat()
+          today = date.today()
+          today_str = today.isoformat()
 
-          # Find reference dates by querying daily_prices
           def find_date(days_ago):
-              """Find the most recent date in daily_prices on or before N days ago."""
-              target = (date.today() - timedelta(days=days_ago)).isoformat()
+              target = (today - timedelta(days=days_ago)).isoformat()
               r = requests.get(
                   f"{SUPABASE_URL}/rest/v1/daily_prices"
                   f"?select=date&date=lte.{target}&order=date.desc&limit=1",
-                  headers=GET_HEADERS,
+                  headers=HEADERS, timeout=15,
               )
-              if r.status_code != 200:
-                  print(f"  ERROR finding date for {days_ago}d ago: {r.status_code} {r.text[:200]}")
-                  return None
-              data = r.json()
-              if isinstance(data, list) and len(data) > 0:
-                  return data[0]["date"]
+              if r.status_code == 200:
+                  data = r.json()
+                  if isinstance(data, list) and len(data) > 0:
+                      return data[0]["date"]
               return None
+
+          d_today = find_date(0)
+          if not d_today:
+              d_today = find_date(1)
+          if not d_today:
+              print("ERROR: No recent price data found!")
+              exit(1)
 
           d7 = find_date(7)
           d30 = find_date(30)
@@ -162,106 +185,78 @@ jobs:
           d2y = find_date(730)
           d5y = find_date(1825)
 
-          print(f"Reference dates: today={today} d7={d7} d30={d30} d90={d90} d180={d180} d365={d365} d2y={d2y} d5y={d5y}")
+          print(f"Reference dates: today={d_today} d7={d7} d30={d30} d90={d90} d180={d180} d365={d365} d2y={d2y} d5y={d5y}")
 
-          # Truncate card_trends
-          requests.delete(
-              f"{SUPABASE_URL}/rest/v1/card_trends?card_slug=neq.",
-              headers=POST_HEADERS,
-          )
-          print("Truncated card_trends")
-
-          # Build and execute the INSERT via raw SQL (using Supabase's RPC or pg_net)
-          # Since we can't run raw SQL via REST, we use a helper RPC function
-          # If that doesn't exist, we'll build the data in Python
-
-          # Get all cards with today's prices
-          print("Fetching today's prices...")
-          offset = 0
-          all_rows = []
-          while True:
-              r = requests.get(
-                  f"{SUPABASE_URL}/rest/v1/daily_prices"
-                  f"?date=eq.{today}&raw_usd=gt.500&select=card_slug,raw_usd,psa10_usd,psa9_usd"
-                  f"&order=card_slug&offset={offset}&limit=1000",
-                  headers=GET_HEADERS,
-              )
-              batch = r.json()
-              if not batch:
-                  break
-              all_rows.extend(batch)
-              offset += 1000
-              if len(batch) < 1000:
-                  break
-
-          print(f"Found {len(all_rows)} cards with prices > $5 today")
-
-          def get_historical_prices(ref_date):
-              """Fetch all prices for a reference date, return as dict keyed by card_slug."""
-              if not ref_date:
-                  return {}
-              prices = {}
+          def fetch_all(endpoint):
+              rows = []
               offset = 0
               while True:
+                  sep = "&" if "?" in endpoint else "?"
                   r = requests.get(
-                      f"{SUPABASE_URL}/rest/v1/daily_prices"
-                      f"?date=eq.{ref_date}&select=card_slug,raw_usd,psa10_usd"
-                      f"&order=card_slug&offset={offset}&limit=1000",
-                      headers=GET_HEADERS,
+                      f"{SUPABASE_URL}/rest/v1/{endpoint}{sep}offset={offset}&limit=1000",
+                      headers=HEADERS, timeout=30,
                   )
-                  batch = r.json()
-                  if not batch:
+                  if r.status_code != 200:
+                      print(f"  WARN: fetch {endpoint} offset={offset}: {r.status_code}")
                       break
-                  for row in batch:
-                      prices[row["card_slug"]] = row
+                  batch = r.json()
+                  if not isinstance(batch, list) or not batch:
+                      break
+                  rows.extend(batch)
                   offset += 1000
                   if len(batch) < 1000:
                       break
-              return prices
+              return rows
 
-          # Fetch historical data for all reference dates
+          print("Fetching today's prices...")
+          today_prices = fetch_all(
+              f"daily_prices?date=eq.{d_today}&raw_usd=gt.500"
+              f"&select=card_slug,raw_usd,psa10_usd,psa9_usd"
+          )
+          print(f"  Found {len(today_prices)} cards with prices > $5")
+
+          if not today_prices:
+              print("ERROR: No prices found for today!")
+              exit(1)
+
+          def get_prices_for_date(ref_date):
+              if not ref_date:
+                  return {}
+              rows = fetch_all(
+                  f"daily_prices?date=eq.{ref_date}&select=card_slug,raw_usd,psa10_usd"
+              )
+              return {row["card_slug"]: row for row in rows}
+
           hist = {}
           for label, ref_date in [("d7", d7), ("d30", d30), ("d90", d90), ("d180", d180), ("d365", d365), ("d2y", d2y), ("d5y", d5y)]:
-              print(f"Fetching {label} ({ref_date})...")
-              hist[label] = get_historical_prices(ref_date)
+              print(f"  Fetching {label} ({ref_date})...")
+              hist[label] = get_prices_for_date(ref_date)
+
+          print("Fetching card metadata...")
+          cards_meta = {}
+          for row in fetch_all("cards?select=card_slug,card_name,set_name"):
+              cards_meta[f"pc-{row['card_slug']}"] = row
 
           def pct(current, old):
               if not old or old == 0 or not current:
                   return None
               return round(((current - old) / old) * 100, 1)
 
-          # Get card names from cards table
-          print("Fetching card metadata...")
-          cards_meta = {}
-          offset = 0
-          while True:
-              r = requests.get(
-                  f"{SUPABASE_URL}/rest/v1/cards"
-                  f"?select=card_slug,card_name,set_name&order=card_slug&offset={offset}&limit=1000",
-                  headers=GET_HEADERS,
-              )
-              batch = r.json()
-              if not batch:
-                  break
-              for row in batch:
-                  cards_meta[f"pc-{row['card_slug']}"] = row
-              offset += 1000
-              if len(batch) < 1000:
-                  break
-
-          # Build trend rows
           trend_rows = []
-          for row in all_rows:
+          for row in today_prices:
               slug = row["card_slug"]
-              meta = cards_meta.get(slug, {})
+              meta = cards_meta.get(slug)
               if not meta:
-                  continue  # No card metadata found
+                  continue
 
               def h(period, field="raw_usd"):
-                  return hist.get(period, {}).get(slug, {}).get(field)
+                  entry = hist.get(period, {}).get(slug)
+                  if entry is None:
+                      return None
+                  return entry.get(field)
 
-              trend_row = {
-                  "card_slug": meta.get("card_slug", slug.replace("pc-", "")),
+              trend_rows.append({
+                  "card_slug": meta["card_slug"],
                   "card_name": meta.get("card_name"),
                   "set_name": meta.get("set_name"),
                   "current_raw": row.get("raw_usd"),
@@ -285,27 +280,44 @@ jobs:
                   "raw_pct_5y": pct(row.get("raw_usd"), h("d5y")),
                   "psa10_pct_30d": pct(row.get("psa10_usd"), h("d30", "psa10_usd")),
                   "psa10_pct_90d": pct(row.get("psa10_usd"), h("d90", "psa10_usd")),
-                  "as_of": today,
-              }
-              trend_rows.append(trend_row)
+                  "as_of": d_today,
+              })
 
-          # Push in batches
+          print(f"Truncating card_trends...")
+          requests.delete(
+              f"{SUPABASE_URL}/rest/v1/card_trends?card_slug=neq.",
+              headers=POST_HEADERS, timeout=30,
+          )
+
           print(f"Pushing {len(trend_rows)} trend rows...")
+          push_headers = {**HEADERS, "Prefer": "resolution=merge-duplicates"}
+          pushed = 0
           for i in range(0, len(trend_rows), 500):
               batch = trend_rows[i:i+500]
               r = requests.post(
                   f"{SUPABASE_URL}/rest/v1/card_trends",
-                  json=batch,
-                  headers={**POST_HEADERS, "Prefer": "resolution=merge-duplicates"},
+                  json=batch, headers=push_headers, timeout=30,
               )
               if r.status_code in (200, 201):
-                  print(f"  Pushed {i+len(batch)}/{len(trend_rows)}")
+                  pushed += len(batch)
               else:
-                  print(f"  ERROR at batch {i}: {r.status_code} {r.text[:200]}")
-
+                  print(f"  ERROR at {i}: {r.status_code} {r.text[:200]}")
+          print(f"  Pushed {pushed}/{len(trend_rows)} rows")
           print("card_trends refresh complete!")
-          PYTHON_EOF
-          fi
+          PYEOF
+
+      - name: Scrape set prices (median + value history)
+        run: python scrape_set_prices.py
 
       - name: Compute analytics (metrics, spread, set metrics)
         run: python compute_analytics.py
+
+      - name: Strip Pokemon prefix from set names
+        run: |
+          curl -s -X POST \
+            "$SUPABASE_URL/rest/v1/rpc/strip_pokemon_prefix" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+          echo "Pokemon prefix stripped from set names"
