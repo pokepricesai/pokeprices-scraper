@@ -92,7 +92,7 @@ jobs:
   # —— eBay API scraper (runs in parallel with batches) ———————————————
   ebay-scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -108,28 +108,10 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python ebay_scraper.py
 
-  # —— Detect deals (runs after scrapers + analytics) ————————————————
-  detect-deals:
-    runs-on: ubuntu-latest
-    needs: [refresh-and-analytics]
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: pip install requests
-      - name: Detect deals
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python detect_deals.py
-
   # —— Refresh card_trends + compute analytics ———————————————————————
   refresh-and-analytics:
     runs-on: ubuntu-latest
-    needs: [batch1, batch2, batch3, batch4, batch5, batch6, ebay-scrape]
+    needs: [batch1, batch2, batch3, batch4, batch5, batch6]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -307,6 +289,7 @@ jobs:
           PYEOF
 
       - name: Scrape set prices (median + value history)
+        continue-on-error: true
         run: python scrape_set_prices.py
 
       - name: Compute analytics (metrics, spread, set metrics)
@@ -321,3 +304,22 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{}'
           echo "Pokemon prefix stripped from set names"
+
+  # —— Detect deals (runs after analytics complete) ———————————————————
+  detect-deals:
+    runs-on: ubuntu-latest
+    needs: [refresh-and-analytics, ebay-scrape]
+    if: always() && needs.refresh-and-analytics.result == 'success'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Detect deals
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python detect_deals.py
