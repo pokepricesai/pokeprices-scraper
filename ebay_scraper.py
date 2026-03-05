@@ -78,6 +78,12 @@ JUNK_KEYWORDS = [
     "keyring", "keychain", "key ring", "key chain",
     "pin badge", "pin ", "sticker", "magnet",
     "playmat", "play mat", "sleeves", "deck box",
+    "metal card", "metal pokemon", "gold metal", "gold plated", "gold card", "iron card",
+    "display", "binder insert", "acrylic", "handmade",
+    "extended art", "artwork case", "case only", "box only",
+    "pick your card", "pick a card", "choose your card", "you pick", "u pick",
+    "jumbo", "oversized", "coin", "topper",
+    "no cards", "empty",
     # Foreign language cards — PriceCharting prices are English only
     "italian", "italiano", "ita ", " ita",
     "german", "deutsch", "deu ", " deu", "glurak",
