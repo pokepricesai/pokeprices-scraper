@@ -363,7 +363,7 @@ def process_listing(item, original_card, marketplace, candidates):
         "seller_feedback_pct": seller.get("feedbackPercentage"),
         "seller_country": item.get("itemLocation", {}).get("country", ""),
         "item_image_url": image,
-        "item_web_url": f"https://www.ebay.com/itm/{ebay_item_id}" if ebay_item_id else item.get("itemWebUrl", ""),
+        "item_web_url": f"https://www.ebay.co.uk/itm/{ebay_item_id}" if (ebay_item_id and marketplace == "EBAY_GB") else f"https://www.ebay.com/itm/{ebay_item_id}" if ebay_item_id else item.get("itemWebUrl", ""),
         "affiliate_url": None,
         "listed_date": item.get("itemCreationDate"),
         "match_confidence": confidence,
