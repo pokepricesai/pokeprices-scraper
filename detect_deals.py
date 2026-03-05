@@ -177,6 +177,20 @@ def detect_deals(listings, trend_map):
             stats["low_confidence"] += 1
             continue
 
+      # Skip junk listings that slipped through
+        title_lower = (listing.get("title") or "").lower()
+        junk_terms = [
+            "metal card", "metal pokemon", "gold metal", "gold plated", "gold card",
+            "display", "binder", "acrylic", "handmade", "extended art",
+            "case only", "box only", "pick your card", "pick a card",
+            "choose your card", "you pick", "u pick", "jumbo", "oversized",
+            "empty", "no cards", "custom", "proxy", "replica", "iron card",
+            "artwork case", "coin", "topper", "sticker",
+        ]
+        if any(junk in title_lower for junk in junk_terms):
+            stats["low_confidence"] += 1
+            continue
+
         # Get the right fair value for this condition
         condition = listing.get("condition", "Ungraded")
         fair_value_cents, value_type = get_fair_value_for_condition(trend, condition)
