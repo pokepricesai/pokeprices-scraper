@@ -323,3 +323,22 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python detect_deals.py
+
+  # —— Nightly analytics (market index, card scores, set scores) ————————
+  nightly-analytics:
+    runs-on: ubuntu-latest
+    needs: [detect-deals]
+    if: always() && needs.detect-deals.result != 'cancelled'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install supabase
+      - name: Run nightly analytics
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python nightly_analytics.py
