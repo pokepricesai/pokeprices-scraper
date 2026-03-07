@@ -297,8 +297,23 @@ def update_set_scores():
 
 # ── MAIN ─────────────────────────────────────────────────────
 
+def refresh_robust_trends():
+    """
+    Calls the SQL function that computes median-window based trend metrics.
+    Populates robust_pct_30d, robust_pct_7d, is_recovery, trend_quality
+    on card_trends. Much more reliable than point-to-point pct changes.
+    """
+    print("Refreshing robust trend metrics...")
+    try:
+        supabase.rpc('refresh_robust_trends').execute()
+        print("  robust_trends refresh complete")
+    except Exception as e:
+        print(f"  ERROR refreshing robust trends: {e}")
+
+
 if __name__ == "__main__":
     update_market_index()
     update_card_scores()
+    refresh_robust_trends()
     update_set_scores()
     print("Analytics update complete.")
