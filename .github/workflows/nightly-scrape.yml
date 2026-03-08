@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 1
-        run: python pokeprices_scraper_v7.py --sets-file batches/batch1.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch1.txt
 
   batch2:
     runs-on: ubuntu-latest
@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 2
-        run: python pokeprices_scraper_v7.py --sets-file batches/batch2.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch2.txt
 
   batch3:
     runs-on: ubuntu-latest
@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 3
-        run: python pokeprices_scraper_v7.py --sets-file batches/batch3.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch3.txt
 
   batch4:
     runs-on: ubuntu-latest
@@ -61,7 +61,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 4
-        run: python pokeprices_scraper_v7.py --sets-file batches/batch4.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch4.txt
 
   batch5:
     runs-on: ubuntu-latest
@@ -74,7 +74,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 5
-        run: python pokeprices_scraper_v7.py --sets-file batches/batch5.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch5.txt
 
   batch6:
     runs-on: ubuntu-latest
@@ -87,7 +87,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 6
-        run: python pokeprices_scraper_v7.py --sets-file batches/batch6.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch6.txt
 
   # —— eBay API scraper (runs in parallel with batches) ———————————————
   ebay-scrape:
