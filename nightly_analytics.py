@@ -2,10 +2,6 @@
 nightly_analytics.py
 Runs after the main price scraper.
 Adds to: market_index, card_scores, set_scores
-
-Add to GitHub Actions workflow AFTER the main scraper step:
-  - name: Run analytics
-    run: python nightly_analytics.py
 """
 
 import os
@@ -22,10 +18,40 @@ TODAY = date.today().isoformat()
 
 # ── 1. MARKET INDEX ──────────────────────────────────────────
 
+def get_nearest_market_index(target_date_str, window_days=5):
+    """
+    Find nearest market_index row within window_days of target.
+    Prefers dates on or before target (look back), falls back to after.
+    """
+    target = date.fromisoformat(target_date_str)
+    low  = (target - timedelta(days=window_days)).isoformat()
+    high = (target + timedelta(days=window_days)).isoformat()
+
+    result = supabase.table("market_index") \
+        .select("date, total_raw_usd") \
+        .gte("date", low) \
+        .lte("date", high) \
+        .order("date", desc=True) \
+        .limit(10) \
+        .execute()
+
+    if not result.data:
+        return None
+
+    before = [r for r in result.data if r["date"] <= target_date_str]
+    if before:
+        return before[0]["total_raw_usd"]
+
+    after = [r for r in result.data if r["date"] > target_date_str]
+    if after:
+        return after[-1]["total_raw_usd"]
+
+    return None
+
+
 def update_market_index():
     print("Updating market_index...")
 
-    # Fetch today's prices
     result = supabase.table("daily_prices").select(
         "card_slug, raw_usd, psa9_usd, psa10_usd"
     ).eq("date", TODAY).execute()
@@ -35,7 +61,7 @@ def update_market_index():
         print("  No price data for today — skipping market_index")
         return
 
-    raw_prices  = [r["raw_usd"]   for r in rows if r.get("raw_usd")   and r["raw_usd"]   > 0]
+    raw_prices   = [r["raw_usd"]   for r in rows if r.get("raw_usd")   and r["raw_usd"]   > 0]
     psa10_prices = [r["psa10_usd"] for r in rows if r.get("psa10_usd") and r["psa10_usd"] > 0]
 
     def median(lst):
@@ -63,26 +89,28 @@ def update_market_index():
         "total_cards_tracked":       len(rows),
     }
 
-    # Compute pct changes
+    # Upsert today's row first so pct lookback can find recent rows
+    supabase.table("market_index").upsert(record, on_conflict="date").execute()
+
+    # Compute pct changes using nearest available date, not exact match
     for days, key in [(1, "raw_pct_1d"), (7, "raw_pct_7d"), (30, "raw_pct_30d")]:
         past_date = (date.today() - timedelta(days=days)).isoformat()
-        past = supabase.table("market_index").select("total_raw_usd").eq("date", past_date).execute()
-        if past.data and past.data[0].get("total_raw_usd"):
-            past_val = past.data[0]["total_raw_usd"]
-            if past_val > 0:
-                record[key] = round((record["total_raw_usd"] - past_val) / past_val * 100, 4)
+        past_val  = get_nearest_market_index(past_date, window_days=5)
+        if past_val and past_val > 0:
+            record[key] = round((record["total_raw_usd"] - past_val) / past_val * 100, 4)
 
+    # Re-upsert with pct values populated
     supabase.table("market_index").upsert(record, on_conflict="date").execute()
     print(f"  market_index updated: {len(rows)} cards, total raw ${sum(raw_prices)/100:,.0f}")
+    print(f"  pct_1d={record.get('raw_pct_1d')} pct_7d={record.get('raw_pct_7d')} pct_30d={record.get('raw_pct_30d')}")
 
 
 # ── 2. CARD SCORES ───────────────────────────────────────────
 
 def compute_liquidity_score(sales_30d, days_since_last_sale):
-    """0-100 liquidity score"""
     sales_score = min(60, (sales_30d or 0) * 10)
     dsls = days_since_last_sale or 999
-    if dsls <= 7:   fresh = 40
+    if dsls <= 7:    fresh = 40
     elif dsls <= 14: fresh = 30
     elif dsls <= 30: fresh = 20
     elif dsls <= 60: fresh = 10
@@ -90,7 +118,6 @@ def compute_liquidity_score(sales_30d, days_since_last_sale):
     return min(100, sales_score + fresh)
 
 def compute_momentum_score(pct_7d, pct_30d, pct_90d):
-    """0-100 momentum score centred at 50"""
     weighted = (
         (pct_7d  or 0) * 0.20 +
         (pct_30d or 0) * 0.50 +
@@ -99,7 +126,6 @@ def compute_momentum_score(pct_7d, pct_30d, pct_90d):
     return max(0, min(100, round(weighted + 50)))
 
 def compute_volatility_score(volatility_30d):
-    """0-100 where 100 = most volatile"""
     if volatility_30d is None: return 50
     return max(0, min(100, round(volatility_30d * 200)))
 
@@ -118,7 +144,6 @@ def volatility_label(v30d):
 def update_card_scores():
     print("Updating card_scores...")
 
-    # Pull today's metrics_daily (raw grade only for base scores)
     metrics_raw = supabase.table("metrics_daily").select(
         "card_slug, current_price, ath_price, ath_date, drawdown_pct, "
         "bottom_price, bottom_date, recovery_pct, "
@@ -130,25 +155,21 @@ def update_card_scores():
         print("  No metrics_daily data for today")
         return
 
-    # Pull card_volume (Ungraded)
     volume = supabase.table("card_volume").select(
         "card_slug, sales_30d, days_since_last_sale, volume_label, confidence"
     ).eq("grade", "Ungraded").execute()
     vol_map = {r["card_slug"]: r for r in (volume.data or [])}
 
-    # Pull spread_daily
     spread = supabase.table("spread_daily").select(
         "card_slug, ratio_10_to_raw, best_value_grade, premium_10_trend"
     ).eq("as_of", TODAY).execute()
     spread_map = {r["card_slug"]: r for r in (spread.data or [])}
 
-    # Pull card names from card_trends
     trends = supabase.table("card_trends").select(
         "card_slug, card_name, set_name"
     ).execute()
     trend_map = {r["card_slug"]: r for r in (trends.data or [])}
 
-    # Pull psa10 pop counts
     pop = supabase.table("card_population").select(
         "card_slug, population"
     ).eq("grade", "psa10").execute()
@@ -165,11 +186,9 @@ def update_card_scores():
         mom_score  = compute_momentum_score(m.get("pct_7d"), m.get("pct_30d"), m.get("pct_90d"))
         volt_score = compute_volatility_score(m.get("volatility_30d"))
 
-        # Confidence score
         conf = m.get("confidence", "low")
         conf_score = {"high": 90, "medium": 60}.get(conf, 25)
 
-        # Hidden gem: rising + low pop + low listings (approximate listing count from card_volume)
         psa10_pop = pop_map.get(slug, 9999)
         sales_30d = vol.get("sales_30d") or 0
         pct_30d   = m.get("pct_30d") or 0
@@ -203,11 +222,8 @@ def update_card_scores():
             "as_of":             TODAY,
         })
 
-    # Batch upsert in chunks of 500
-    chunk_size = 500
-    for i in range(0, len(scores), chunk_size):
-        chunk = scores[i:i + chunk_size]
-        supabase.table("card_scores").upsert(chunk, on_conflict="card_slug").execute()
+    for i in range(0, len(scores), 500):
+        supabase.table("card_scores").upsert(scores[i:i+500], on_conflict="card_slug").execute()
 
     print(f"  card_scores updated: {len(scores)} cards")
 
@@ -218,7 +234,7 @@ def update_set_scores():
     print("Updating set_scores...")
 
     result = supabase.table("set_metrics_daily").select("*").eq(
-        "as_of", (date.today() - timedelta(days=1)).isoformat()  # use yesterday if today not ready
+        "as_of", (date.today() - timedelta(days=1)).isoformat()
     ).execute()
 
     if not result.data:
@@ -230,27 +246,18 @@ def update_set_scores():
         print("  No set_metrics_daily data")
         return
 
-    # Normalise scores across all sets
-    all_values = [r.get("set_total_value") or 0 for r in result.data if r.get("set_total_value")]
-    max_value  = max(all_values) if all_values else 1
-
     scores = []
     for s in result.data:
         total_val  = s.get("set_total_value") or 0
         pct_90d    = float(s.get("set_pct_90d") or 0)
         top1_share = float(s.get("top1_share_pct") or 100)
         priced     = s.get("priced_cards") or 0
-        total      = s.get("total_cards") or 1
 
-        # Value score (0-40)
         val_score = min(40, max(0, round(math.log(max(1, total_val / 100000)) * 6)))
-        # Momentum score (0-40)
         mom_score = min(40, max(0, round(pct_90d + 20)))
-        # Diversification score (0-20)
         div_score = min(20, max(0, round((100 - top1_share) / 5)))
         strength  = val_score + mom_score + div_score
 
-        # Era classification from set_metadata if available, else guess from name
         name = s.get("set_name", "")
         if any(x in name for x in ["Base", "Jungle", "Fossil", "Rocket", "Gym", "Neo", "Skyridge", "Aquapolis"]):
             era = "wotc"
@@ -286,10 +293,9 @@ def update_set_scores():
             "as_of":               s.get("as_of"),
         })
 
-    chunk_size = 200
-    for i in range(0, len(scores), chunk_size):
+    for i in range(0, len(scores), 200):
         supabase.table("set_scores").upsert(
-            scores[i:i + chunk_size], on_conflict="set_name"
+            scores[i:i+200], on_conflict="set_name"
         ).execute()
 
     print(f"  set_scores updated: {len(scores)} sets")
@@ -298,11 +304,6 @@ def update_set_scores():
 # ── MAIN ─────────────────────────────────────────────────────
 
 def refresh_robust_trends():
-    """
-    Calls the SQL function that computes median-window based trend metrics.
-    Populates robust_pct_30d, robust_pct_7d, is_recovery, trend_quality
-    on card_trends. Much more reliable than point-to-point pct changes.
-    """
     print("Refreshing robust trend metrics...")
     try:
         supabase.rpc('refresh_robust_trends').execute()
@@ -312,11 +313,6 @@ def refresh_robust_trends():
 
 
 def refresh_weekly_report_cache():
-    """
-    Precomputes the weekly market report and stores it in weekly_report_cache.
-    The frontend then does a simple table read instead of a heavy join query,
-    eliminating the statement timeout error on page load.
-    """
     print("Refreshing weekly report cache...")
     try:
         supabase.rpc('refresh_weekly_report_cache').execute()
