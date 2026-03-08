@@ -1,13 +1,11 @@
 """
-PokePrices Scraper v8
+PokePrices Scraper v9
 =====================
-Based on v7. Changes:
-  - Added image extraction from PriceCharting pages
-  - Images saved to cards.image_url and cards.pc_url on first scrape
-  - Only updates image if image_url is currently null (no unnecessary writes)
-  - Also saves pc_url to cards table for all scraped cards
-
-All other behaviour unchanged.
+Based on v8. Changes:
+  - Added sales volume extraction from PriceCharting pages
+  - Volume text (e.g. "1 sale per day", "2 sales per month") parsed to monthly figure
+  - Monthly sales upserted into card_volume table (sales_30d field)
+  - All other behaviour unchanged
 """
 
 import requests
@@ -23,10 +21,9 @@ from datetime import datetime, timezone
 # CONFIGURATION
 # ============================================
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://egidpsrkqvymvioidatc.supabase.co")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://egidpsrkqveioidatc.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
 
-# Folder containing PriceCharting CSV downloads
 LOCAL_CSV_FOLDER = r"C:\Users\lukep\OneDrive\Desktop\pokeprices\pc_csvs"
 REPO_CSV_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pc_csvs")
 
@@ -192,30 +189,112 @@ def extract_historical_prices(html):
 
 
 # ============================================
-# v8: IMAGE EXTRACTION
+# v9: VOLUME EXTRACTION
+# ============================================
+
+def extract_sales_volume(html):
+    """
+    Extract sales volume from PriceCharting page.
+
+    PriceCharting shows volume as text in the page like:
+      "1 sale per day", "2 sales per day"
+      "1 sale per week", "3 sales per week"
+      "1 sale per month", "2 sales per month"
+      "1 sale per year", "1 sale per 2 years"
+
+    These appear near the grade price cells, typically in a
+    <span class="volume"> or similar element.
+
+    We extract the "Ungraded" / raw volume since that's what
+    maps to our sales_30d field.
+
+    Returns approximate monthly sales as a float, or None.
+    """
+
+    # PriceCharting volume text patterns — appears as plain text near price cells
+    # Try to find volume associated with "used" (ungraded/raw) price first
+    # then fall back to any volume text on the page
+
+    volume_patterns = [
+        # Inside a volume span/div near the used price section
+        r'id=["\']used_price["\'].*?volume["\']?\s*[^>]*>([^<]+sale[^<]+)',
+        # Generic volume text anywhere
+        r'class=["\']volume["\'][^>]*>\s*([^<]*\d+\s+sale[^<]*)',
+        r'<span[^>]*>\s*(\d+\s+sales?\s+per\s+(?:day|week|month|year)[^<]*)\s*</span>',
+        r'volume["\']?\s*[^>]*>\s*([^<]*\d+[^<]*sale[^<]*)',
+    ]
+
+    volume_text = None
+    for pattern in volume_patterns:
+        match = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip()
+            # Make sure it actually contains sale volume info
+            if re.search(r'\d+\s+sales?\s+per', candidate, re.IGNORECASE):
+                volume_text = candidate
+                break
+
+    if not volume_text:
+        return None
+
+    return parse_volume_to_monthly(volume_text)
+
+
+def parse_volume_to_monthly(text):
+    """
+    Convert PriceCharting volume text to approximate monthly sales.
+
+    Examples:
+      "1 sale per day"     → 30
+      "2 sales per day"    → 60
+      "1 sale per week"    → 4.3
+      "3 sales per week"   → 12.9
+      "1 sale per month"   → 1
+      "2 sales per month"  → 2
+      "1 sale per year"    → 0.08
+      "1 sale per 2 years" → 0.04
+
+    Returns rounded integer (minimum 1 if any sales found).
+    """
+    text = text.lower().strip()
+
+    # Extract number of sales
+    sales_match = re.search(r'(\d+(?:\.\d+)?)\s+sales?', text)
+    if not sales_match:
+        return None
+    sales_count = float(sales_match.group(1))
+
+    # Extract period
+    if 'per day' in text:
+        monthly = sales_count * 30
+    elif 'per week' in text:
+        monthly = sales_count * 4.33
+    elif 'per month' in text:
+        monthly = sales_count
+    elif 'per 2 year' in text:
+        monthly = sales_count / 24
+    elif 'per year' in text:
+        monthly = sales_count / 12
+    else:
+        return None
+
+    # Round to nearest integer, minimum 1 if any sales found
+    return max(1, round(monthly))
+
+
+# ============================================
+# IMAGE EXTRACTION
 # ============================================
 
 def extract_image_url(html):
-    """
-    Extract card image URL from PriceCharting page HTML.
-    PriceCharting puts the card image in #product_image or a similar container.
-    Tries multiple selectors in order of reliability.
-    Returns image URL string or None.
-    """
-    # Try each pattern in order — most reliable first
     patterns = [
-        # Standard product image div
         r'<div[^>]+id=["\']product_image["\'][^>]*>.*?<img[^>]+src=["\']([^"\']+)["\']',
-        # img with id="photo"
         r'<img[^>]+id=["\']photo["\'][^>]+src=["\']([^"\']+)["\']',
         r'<img[^>]+src=["\']([^"\']+)["\'][^>]+id=["\']photo["\']',
-        # itemprop image
         r'<img[^>]+itemprop=["\']image["\'][^>]+src=["\']([^"\']+)["\']',
         r'<img[^>]+src=["\']([^"\']+)["\'][^>]+itemprop=["\']image["\']',
-        # PriceCharting CDN image URLs (their images are hosted on a CDN)
         r'src=["\'](https://[^"\']*pricecharting[^"\']*\.jpg[^"\']*)["\']',
         r'src=["\'](https://[^"\']*pricecharting[^"\']*\.png[^"\']*)["\']',
-        # Broad fallback: any image in the page that looks like a card scan
         r'src=["\'](https://d2n9x8p9xh9t10\.cloudfront\.net[^"\']+)["\']',
         r'src=["\'](//d2n9x8p9xh9t10\.cloudfront\.net[^"\']+)["\']',
     ]
@@ -224,10 +303,8 @@ def extract_image_url(html):
         match = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
         if match:
             url = match.group(1)
-            # Normalise protocol-relative URLs
             if url.startswith('//'):
                 url = 'https:' + url
-            # Skip placeholder/icon images
             if any(skip in url.lower() for skip in ['placeholder', 'blank', 'logo', 'favicon', 'icon', 'avatar']):
                 continue
             return url
@@ -278,11 +355,6 @@ def push_batch_to_supabase(records):
 
 
 def update_card_image(pc_id, image_url, pc_url):
-    """
-    v8: Update image_url and pc_url on the cards table.
-    Uses pc_slug (which stores the numeric pc_id) to find the right row.
-    Only updates if image_url is currently null — avoids unnecessary writes.
-    """
     card_slug = f"pc-{pc_id}"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -305,6 +377,39 @@ def update_card_image(pc_id, image_url, pc_url):
         return resp.status_code in (200, 201, 204)
     except Exception as e:
         print(f"  Image update error: {e}")
+        return False
+
+
+def upsert_card_volume(card_slug, sales_30d):
+    """
+    Upsert sales_30d into card_volume table.
+    Only updates the sales_30d field — leaves all other volume fields untouched.
+    """
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    payload = {
+        "card_slug": card_slug,
+        "sales_30d": sales_30d,
+        "as_of": today,
+    }
+
+    try:
+        resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/card_volume?on_conflict=card_slug",
+            json=payload,
+            headers=headers,
+            timeout=15,
+        )
+        return resp.status_code in (200, 201, 204)
+    except Exception as e:
+        print(f"  Volume upsert error: {e}")
         return False
 
 
@@ -362,7 +467,7 @@ def main():
     est_seconds = len(cards) * (REQUEST_DELAY + 0.8)
 
     print(f"\n{'='*60}")
-    print(f"PokePrices Scraper v8 — {history_label}")
+    print(f"PokePrices Scraper v9 — {history_label}")
     print(f"{'='*60}")
     if set_filter:
         print(f"Set:      {set_filter}")
@@ -378,6 +483,7 @@ def main():
     not_found = 0
     errors = 0
     images_saved = 0
+    volumes_saved = 0
     total_records = 0
 
     for i, card in enumerate(cards):
@@ -404,7 +510,7 @@ def main():
         found += 1
         records = []
 
-        # v8: Extract and save image if present
+        # v8: image extraction
         if html:
             image_url = extract_image_url(html)
             if image_url or url:
@@ -412,6 +518,15 @@ def main():
                 if updated and image_url:
                     images_saved += 1
                     print(f"  🖼  Image saved")
+
+        # v9: volume extraction
+        if html:
+            sales_monthly = extract_sales_volume(html)
+            if sales_monthly is not None:
+                ok = upsert_card_volume(card_slug, sales_monthly)
+                if ok:
+                    volumes_saved += 1
+                    print(f"  📊 Volume: ~{sales_monthly}/mo")
 
         # Today's price record
         today_record = {
@@ -459,6 +574,7 @@ def main():
     print(f"Cards not found:  {not_found}")
     print(f"Errors:           {errors}")
     print(f"Images saved:     {images_saved}")
+    print(f"Volumes saved:    {volumes_saved}")
     print(f"Records pushed:   {total_records}")
     print(f"{'='*60}")
 
