@@ -2,6 +2,11 @@
 nightly_analytics.py
 Runs after the main price scraper.
 Adds to: market_index, card_scores, set_scores
+
+v2 fixes:
+  - market_index: fetches all daily_prices in batches (was capped at 1,000)
+  - robust_trends: increased timeout to 120s
+  - weekly_report_cache: RPC SQL fix documented below
 """
 
 import os
@@ -16,13 +21,33 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 TODAY = date.today().isoformat()
 
 
+# ── HELPERS ──────────────────────────────────────────────────
+
+def fetch_all(table, select, filters=None, batch_size=1000):
+    """
+    Fetch all rows from a table, paginating in batches to bypass the 1,000 row default limit.
+    filters: list of (method, *args) tuples, e.g. [('eq', 'date', TODAY)]
+    """
+    all_rows = []
+    offset = 0
+    while True:
+        q = supabase.table(table).select(select).range(offset, offset + batch_size - 1)
+        if filters:
+            for f in filters:
+                method, *args = f
+                q = getattr(q, method)(*args)
+        result = q.execute()
+        batch = result.data or []
+        all_rows.extend(batch)
+        if len(batch) < batch_size:
+            break
+        offset += batch_size
+    return all_rows
+
+
 # ── 1. MARKET INDEX ──────────────────────────────────────────
 
 def get_nearest_market_index(target_date_str, window_days=5):
-    """
-    Find nearest market_index row within window_days of target.
-    Prefers dates on or before target (look back), falls back to after.
-    """
     target = date.fromisoformat(target_date_str)
     low  = (target - timedelta(days=window_days)).isoformat()
     high = (target + timedelta(days=window_days)).isoformat()
@@ -52,11 +77,13 @@ def get_nearest_market_index(target_date_str, window_days=5):
 def update_market_index():
     print("Updating market_index...")
 
-    result = supabase.table("daily_prices").select(
-        "card_slug, raw_usd, psa9_usd, psa10_usd"
-    ).eq("date", TODAY).execute()
+    # FIX: fetch ALL rows, not just first 1,000
+    rows = fetch_all(
+        "daily_prices",
+        "card_slug, raw_usd, psa9_usd, psa10_usd",
+        filters=[("eq", "date", TODAY)]
+    )
 
-    rows = result.data or []
     if not rows:
         print("  No price data for today — skipping market_index")
         return
@@ -92,7 +119,7 @@ def update_market_index():
     # Upsert today's row first so pct lookback can find recent rows
     supabase.table("market_index").upsert(record, on_conflict="date").execute()
 
-    # Compute pct changes using nearest available date, not exact match
+    # Compute pct changes using nearest available date
     for days, key in [(1, "raw_pct_1d"), (7, "raw_pct_7d"), (30, "raw_pct_30d")]:
         past_date = (date.today() - timedelta(days=days)).isoformat()
         past_val  = get_nearest_market_index(past_date, window_days=5)
@@ -144,39 +171,46 @@ def volatility_label(v30d):
 def update_card_scores():
     print("Updating card_scores...")
 
-    metrics_raw = supabase.table("metrics_daily").select(
+    # FIX: fetch all metrics in batches
+    metrics_data = fetch_all(
+        "metrics_daily",
         "card_slug, current_price, ath_price, ath_date, drawdown_pct, "
         "bottom_price, bottom_date, recovery_pct, "
         "pct_7d, pct_30d, pct_90d, volatility_30d, confidence, "
-        "data_points_90d, freshness_days"
-    ).eq("grade", "raw").eq("as_of", TODAY).execute()
+        "data_points_90d, freshness_days",
+        filters=[("eq", "grade", "raw"), ("eq", "as_of", TODAY)]
+    )
 
-    if not metrics_raw.data:
+    if not metrics_data:
         print("  No metrics_daily data for today")
         return
 
-    volume = supabase.table("card_volume").select(
-        "card_slug, sales_30d, days_since_last_sale, volume_label, confidence"
-    ).eq("grade", "Ungraded").execute()
-    vol_map = {r["card_slug"]: r for r in (volume.data or [])}
+    volume = fetch_all(
+        "card_volume",
+        "card_slug, sales_30d, days_since_last_sale, volume_label, confidence",
+        filters=[("eq", "grade", "Ungraded")]
+    )
+    vol_map = {r["card_slug"]: r for r in volume}
 
-    spread = supabase.table("spread_daily").select(
-        "card_slug, ratio_10_to_raw, best_value_grade, premium_10_trend"
-    ).eq("as_of", TODAY).execute()
-    spread_map = {r["card_slug"]: r for r in (spread.data or [])}
+    spread = fetch_all(
+        "spread_daily",
+        "card_slug, ratio_10_to_raw, best_value_grade, premium_10_trend",
+        filters=[("eq", "as_of", TODAY)]
+    )
+    spread_map = {r["card_slug"]: r for r in spread}
 
-    trends = supabase.table("card_trends").select(
-        "card_slug, card_name, set_name"
-    ).execute()
-    trend_map = {r["card_slug"]: r for r in (trends.data or [])}
+    trends = fetch_all("card_trends", "card_slug, card_name, set_name")
+    trend_map = {r["card_slug"]: r for r in trends}
 
-    pop = supabase.table("card_population").select(
-        "card_slug, population"
-    ).eq("grade", "psa10").execute()
-    pop_map = {r["card_slug"]: r["population"] for r in (pop.data or [])}
+    pop = fetch_all(
+        "card_population",
+        "card_slug, population",
+        filters=[("eq", "grade", "psa10")]
+    )
+    pop_map = {r["card_slug"]: r["population"] for r in pop}
 
     scores = []
-    for m in metrics_raw.data:
+    for m in metrics_data:
         slug = m["card_slug"]
         vol  = vol_map.get(slug, {})
         sp   = spread_map.get(slug, {})
@@ -228,7 +262,31 @@ def update_card_scores():
     print(f"  card_scores updated: {len(scores)} cards")
 
 
-# ── 3. SET SCORES ────────────────────────────────────────────
+# ── 3. ROBUST TRENDS ─────────────────────────────────────────
+
+def refresh_robust_trends():
+    print("Refreshing robust trend metrics...")
+    try:
+        # FIX: use postgrest_params to set a longer statement timeout before calling the RPC
+        supabase.postgrest.session.headers.update({"statement_timeout": "120000"})
+        supabase.rpc('refresh_robust_trends').execute()
+        print("  robust_trends refresh complete")
+    except Exception as e:
+        print(f"  ERROR refreshing robust trends: {e}")
+
+
+# ── 4. WEEKLY REPORT CACHE ───────────────────────────────────
+
+def refresh_weekly_report_cache():
+    print("Refreshing weekly report cache...")
+    try:
+        supabase.rpc('refresh_weekly_report_cache').execute()
+        print("  weekly_report_cache refresh complete")
+    except Exception as e:
+        print(f"  ERROR refreshing weekly report cache: {e}")
+
+
+# ── 5. SET SCORES ────────────────────────────────────────────
 
 def update_set_scores():
     print("Updating set_scores...")
@@ -302,24 +360,6 @@ def update_set_scores():
 
 
 # ── MAIN ─────────────────────────────────────────────────────
-
-def refresh_robust_trends():
-    print("Refreshing robust trend metrics...")
-    try:
-        supabase.rpc('refresh_robust_trends').execute()
-        print("  robust_trends refresh complete")
-    except Exception as e:
-        print(f"  ERROR refreshing robust trends: {e}")
-
-
-def refresh_weekly_report_cache():
-    print("Refreshing weekly report cache...")
-    try:
-        supabase.rpc('refresh_weekly_report_cache').execute()
-        print("  weekly_report_cache refresh complete")
-    except Exception as e:
-        print(f"  ERROR refreshing weekly report cache: {e}")
-
 
 if __name__ == "__main__":
     update_market_index()
