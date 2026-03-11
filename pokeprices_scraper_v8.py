@@ -136,13 +136,12 @@ def build_url(console_name, product_name):
     console_slug = console_slug.replace("&", "&")
 
     slug = product_name.lower()
-    slug = slug.replace("[", "").replace("]", "")
-    slug = slug.replace("#", "")
-    slug = re.sub(r"[^a-z0-9\s.&'-]", '', slug)
-    slug = slug.strip()
-    slug = re.sub(r'\s+', '-', slug)
-    slug = re.sub(r'-+', '-', slug)
-
+slug = slug.replace("[", "").replace("]", "")
+slug = slug.replace("#", "")
+slug = re.sub(r"[^a-z0-9\s&]", '', slug)
+slug = slug.strip()
+slug = re.sub(r'\s+', '-', slug)
+slug = re.sub(r'-+', '-', slug)
     return f"https://www.pricecharting.com/game/{console_slug}/{slug}"
 
 
