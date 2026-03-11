@@ -109,12 +109,11 @@ print(f"  180d={d180} 365d={d365} 2y={d2y} 5y={d5y}")
 
 # ── Fetch today's prices ──────────────────────────────────────────────
 
-print("Fetching today's prices...")
 today_prices = fetch_all(
-    f"daily_prices?date=eq.{d_today}&raw_usd=gt.500"
+    f"daily_prices?date=eq.{d_today}"
     f"&select=card_slug,raw_usd,psa10_usd,psa9_usd"
 )
-print(f"  Found {len(today_prices)} cards with prices > $5")
+print(f"  Found {len(today_prices)} cards with prices today")
 
 if not today_prices:
     print("ERROR: No prices found for today!")
