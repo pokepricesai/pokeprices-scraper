@@ -422,9 +422,15 @@ def generate_article(theme: str, theme_label: str, data: dict, today: datetime) 
         )
         raw = response.content[0].text.strip()
 
-        # Strip markdown fences if model adds them anyway
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
+        # Aggressively strip any markdown or extra text
+        # Find the first { and last } and take everything between
+        start = raw.find('{')
+        end = raw.rfind('}')
+        if start == -1 or end == -1:
+            print(f"  No JSON object found in response")
+            print(f"  Raw response: {raw[:500]}")
+            return None
+        raw = raw[start:end+1]
 
         article = json.loads(raw)
         return article
