@@ -37,134 +37,220 @@ THEMES = {
 }
 
 # ── SET ALLOWLIST ─────────────────────────────────────────────────────────────
-# Mainstream TCG sets only — excludes Topps, promo oddities, Japanese exclusives etc.
+# Sets with deep, reliable sales history only.
+# Modern sets prioritised but key vintage included.
 
 ALLOWED_SETS = {
-    # Wizards of the Coast era
-    "Base Set", "Base Set 2", "Jungle", "Fossil", "Team Rocket",
-    "Gym Heroes", "Gym Challenge",
-    "Neo Genesis", "Neo Discovery", "Neo Revelation", "Neo Destiny",
-    "Legendary Collection",
-    "Expedition Base Set", "Aquapolis", "Skyridge",
-    # EX era
-    "EX Ruby & Sapphire", "EX Sandstorm", "EX Dragon", "EX FireRed & LeafGreen",
-    "EX Team Magma vs Team Aqua", "EX Hidden Legends", "EX Emerald",
-    "EX Unseen Forces", "EX Delta Species", "EX Legend Maker",
-    "EX Holon Phantoms", "EX Crystal Guardians", "EX Dragon Frontiers",
-    "EX Power Keepers",
-    # Diamond & Pearl era
-    "Diamond & Pearl", "Mysterious Treasures", "Secret Wonders",
-    "Great Encounters", "Majestic Dawn", "Legends Awakened", "Stormfront",
-    "Platinum", "Rising Rivals", "Supreme Victors", "Arceus",
-    # HeartGold & SoulSilver era
-    "HeartGold & SoulSilver", "Unleashed", "Undaunted", "Triumphant",
-    "Call of Legends",
-    # Black & White era
-    "Black & White", "Emerging Powers", "Noble Victories", "Next Destinies",
-    "Dark Explorers", "Dragons Exalted", "Boundaries Crossed",
-    "Plasma Storm", "Plasma Freeze", "Plasma Blast", "Legendary Treasures",
-    # XY era
-    "XY", "Flashfire", "Furious Fists", "Phantom Forces", "Primal Clash",
-    "Roaring Skies", "Ancient Origins", "BREAKthrough", "BREAKpoint",
-    "Fates Collide", "Steam Siege", "Evolutions",
-    # Sun & Moon era
-    "Sun & Moon", "Guardians Rising", "Burning Shadows", "Shining Legends",
-    "Crimson Invasion", "Ultra Prism", "Forbidden Light", "Celestial Storm",
-    "Dragon Majesty", "Lost Thunder", "Team Up", "Unbroken Bonds",
-    "Unified Minds", "Hidden Fates", "Cosmic Eclipse",
-    # Sword & Shield era
-    "Sword & Shield", "Rebel Clash", "Darkness Ablaze", "Champion's Path",
-    "Vivid Voltage", "Shining Fates", "Battle Styles", "Chilling Reign",
-    "Evolving Skies", "Celebrations", "Fusion Strike", "Brilliant Stars",
-    "Astral Radiance", "Pokemon GO", "Lost Origin", "Silver Tempest",
+    # Vintage — iconic sets with strong collector demand and deep data
+    "Base Set",
+    "Jungle",
+    "Fossil",
+    "Team Rocket",
+    "Neo Genesis",
+    "Neo Destiny",
+    # Sun & Moon era — transitional, good data
+    "Hidden Fates",
+    "Cosmic Eclipse",
+    "Unified Minds",
+    "Team Up",
+    "Unbroken Bonds",
+    # Sword & Shield era — deep modern data
+    "Rebel Clash",
+    "Darkness Ablaze",
+    "Champion's Path",
+    "Vivid Voltage",
+    "Shining Fates",
+    "Battle Styles",
+    "Chilling Reign",
+    "Evolving Skies",
+    "Celebrations",
+    "Fusion Strike",
+    "Brilliant Stars",
+    "Astral Radiance",
+    "Lost Origin",
+    "Silver Tempest",
     "Crown Zenith",
-    # Scarlet & Violet era
-    "Scarlet & Violet", "Paldea Evolved", "Obsidian Flames", "151",
-    "Paradox Rift", "Paldean Fates", "Temporal Forces",
-    "Twilight Masquerade", "Shrouded Fable", "Stellar Crown", "Surging Sparks",
+    # Scarlet & Violet era — current meta, best data
+    "Scarlet & Violet",
+    "Paldea Evolved",
+    "Obsidian Flames",
+    "151",
+    "Paradox Rift",
+    "Paldean Fates",
+    "Temporal Forces",
+    "Twilight Masquerade",
+    "Stellar Crown",
+    "Surging Sparks",
     "Prismatic Evolutions",
 }
 
+# ── DATA QUALITY CONSTANTS ────────────────────────────────────────────────────
+
+MIN_RAW_CENTS    = 2000    # $20 minimum raw value — no one cares about cheap commons
+MIN_PSA10_CENTS  = 5000    # $50 minimum PSA 10 value for grading content
+MAX_PCT_7D       = 100.0   # Cap 7-day moves — above this is likely a data anomaly
+MAX_PCT_30D      = 200.0   # Cap 30-day moves — anything higher is almost certainly bad data
+MIN_PRICE_POINTS = 30      # Minimum daily_prices entries for a card to be considered reliable
+
+
+# ── HELPERS ───────────────────────────────────────────────────────────────────
 
 def is_allowed_set(set_name: str) -> bool:
     return set_name in ALLOWED_SETS
 
 
-# ── PRICE HELPERS ─────────────────────────────────────────────────────────────
-
 def cents_to_dollars(cents) -> float:
-    """Safely convert cent integer to dollar float."""
     if not cents:
         return 0.0
     return round(int(cents) / 100, 2)
 
 
 def normalise_card(card: dict) -> dict:
-    """Convert price fields from cents to dollars in-place. Returns card."""
+    """Convert price fields from cents to dollars in-place."""
     for field in ("current_raw", "current_psa10"):
         if card.get(field) is not None:
             card[field] = cents_to_dollars(card[field])
     return card
 
 
+def is_credible_mover(card: dict) -> bool:
+    """
+    Filter out cards with anomalous percentage moves.
+    After normalise_card(), current_raw is already in dollars.
+    pct fields are percentages (float), not modified by normalise_card.
+    """
+    pct_7d  = card.get("raw_pct_7d")
+    pct_30d = card.get("raw_pct_30d")
+
+    if pct_7d is not None and abs(pct_7d) > MAX_PCT_7D:
+        return False
+    if pct_30d is not None and abs(pct_30d) > MAX_PCT_30D:
+        return False
+    return True
+
+
+def get_price_point_counts(slugs: list) -> dict:
+    """
+    Return a dict of {card_slug: count} for how many daily_prices entries each card has.
+    Cards with fewer than MIN_PRICE_POINTS are considered unreliable.
+    Batches the query to avoid URL length issues.
+    """
+    if not slugs:
+        return {}
+
+    counts = {}
+    batch_size = 50
+    for i in range(0, len(slugs), batch_size):
+        batch = slugs[i:i + batch_size]
+        # Use pc- prefixed slugs as stored in daily_prices
+        pc_slugs = [s if s.startswith("pc-") else f"pc-{s}" for s in batch]
+        res = (
+            supabase.table("daily_prices")
+            .select("card_slug")
+            .in_("card_slug", pc_slugs)
+            .execute()
+        )
+        for row in (res.data or []):
+            slug = row["card_slug"]
+            counts[slug] = counts.get(slug, 0) + 1
+
+    return counts
+
+
+def filter_by_data_quality(cards: list, slug_field: str = "card_slug") -> list:
+    """
+    Remove cards that don't have enough price history to be reliable.
+    slug_field is the key in the card dict that holds the card slug.
+    """
+    if not cards:
+        return []
+
+    slugs = [c.get(slug_field, "") for c in cards]
+    counts = get_price_point_counts(slugs)
+
+    reliable = []
+    for card in cards:
+        slug = card.get(slug_field, "")
+        pc_slug = slug if slug.startswith("pc-") else f"pc-{slug}"
+        if counts.get(pc_slug, 0) >= MIN_PRICE_POINTS:
+            reliable.append(card)
+
+    return reliable
+
+
 # ── DATA FETCHERS ─────────────────────────────────────────────────────────────
 
 def fetch_movers_data() -> dict:
-    """Top risers and fallers from card_trends."""
+    """Top credible risers and fallers — filtered for data quality and value."""
     risers_res = (
         supabase.table("card_trends")
         .select("card_slug, card_name, set_name, current_raw, raw_pct_7d, raw_pct_30d")
         .gt("raw_pct_7d", 0)
-        .gt("current_raw", 200)
+        .gt("current_raw", MIN_RAW_CENTS)
+        .lte("raw_pct_7d", MAX_PCT_7D)        # cap anomalies at source
+        .lte("raw_pct_30d", MAX_PCT_30D)
         .order("raw_pct_7d", desc=True)
-        .limit(30)
+        .limit(60)
         .execute()
     )
     fallers_res = (
         supabase.table("card_trends")
         .select("card_slug, card_name, set_name, current_raw, raw_pct_7d, raw_pct_30d")
         .lt("raw_pct_7d", 0)
-        .gt("current_raw", 200)
+        .gt("current_raw", MIN_RAW_CENTS)
+        .gte("raw_pct_7d", -MAX_PCT_7D)
         .order("raw_pct_7d", desc=False)
-        .limit(30)
+        .limit(60)
         .execute()
     )
 
-    risers = [normalise_card(c) for c in (risers_res.data or []) if is_allowed_set(c.get("set_name", ""))][:8]
-    fallers = [normalise_card(c) for c in (fallers_res.data or []) if is_allowed_set(c.get("set_name", ""))][:8]
+    risers_raw = [
+        normalise_card(c) for c in (risers_res.data or [])
+        if is_allowed_set(c.get("set_name", "")) and is_credible_mover(c)
+    ]
+    fallers_raw = [
+        normalise_card(c) for c in (fallers_res.data or [])
+        if is_allowed_set(c.get("set_name", "")) and is_credible_mover(c)
+    ]
+
+    risers = filter_by_data_quality(risers_raw)[:8]
+    fallers = filter_by_data_quality(fallers_raw)[:6]
 
     return {"risers": risers, "fallers": fallers}
 
 
 def fetch_grading_data() -> dict:
-    """Cards where PSA 10 premium is significant."""
+    """Cards where the PSA 10 premium tells an interesting story."""
     res = (
         supabase.table("card_trends")
-        .select("card_slug, card_name, set_name, current_raw, current_psa10")
-        .gt("current_raw", 500)
-        .gt("current_psa10", 2000)
+        .select("card_slug, card_name, set_name, current_raw, current_psa10, raw_pct_30d")
+        .gt("current_raw", MIN_RAW_CENTS)
+        .gt("current_psa10", MIN_PSA10_CENTS)
         .order("current_psa10", desc=True)
-        .limit(50)
+        .limit(80)
         .execute()
     )
+
     cards = []
     for c in (res.data or []):
         if not is_allowed_set(c.get("set_name", "")):
             continue
-        raw_usd = cents_to_dollars(c.get("current_raw") or 0)
+        raw_usd   = cents_to_dollars(c.get("current_raw") or 0)
         psa10_usd = cents_to_dollars(c.get("current_psa10") or 0)
-        c["current_raw"] = raw_usd
-        c["current_psa10"] = psa10_usd
-        c["grade_multiplier"] = round(psa10_usd / raw_usd, 2) if raw_usd > 0 else None
+        c["current_raw"]       = raw_usd
+        c["current_psa10"]     = psa10_usd
+        c["grade_multiplier"]  = round(psa10_usd / raw_usd, 2) if raw_usd > 0 else None
         cards.append(c)
 
     cards.sort(key=lambda x: x.get("grade_multiplier") or 0, reverse=True)
+    cards = filter_by_data_quality(cards)[:12]
 
+    # Low-pop PSA data for context
     pop_res = (
         supabase.table("psa_population")
         .select("card_name, set_name, psa10_count, psa9_count, total_graded")
         .gt("psa10_count", 0)
-        .lt("psa10_count", 300)
+        .lt("psa10_count", 500)
         .order("psa10_count", desc=False)
         .limit(10)
         .execute()
@@ -174,15 +260,21 @@ def fetch_grading_data() -> dict:
 
 
 def fetch_set_watch_data() -> dict:
-    """Pick the most active allowed set this week."""
+    """Pick the most active allowed set this week with credible moves."""
     res = (
         supabase.table("card_trends")
         .select("set_name, card_slug, card_name, current_raw, raw_pct_7d, raw_pct_30d, raw_pct_90d")
         .not_.is_("raw_pct_7d", "null")
-        .gt("current_raw", 100)
+        .gt("current_raw", MIN_RAW_CENTS)
+        .lte("raw_pct_7d", MAX_PCT_7D)
+        .gte("raw_pct_7d", -MAX_PCT_7D)
         .execute()
     )
-    all_cards = [c for c in (res.data or []) if is_allowed_set(c.get("set_name", ""))]
+
+    all_cards = [
+        c for c in (res.data or [])
+        if is_allowed_set(c.get("set_name", "")) and is_credible_mover(c)
+    ]
 
     if not all_cards:
         return {"set_name": "Unknown", "cards": [], "set_stats": {}}
@@ -193,21 +285,25 @@ def fetch_set_watch_data() -> dict:
         if card.get("raw_pct_7d") is not None:
             set_activity[card["set_name"]].append(abs(card["raw_pct_7d"]))
 
-    scored = {k: sum(v) / len(v) for k, v in set_activity.items() if len(v) >= 5}
-    best_set = max(scored.items(), key=lambda x: x[1], default=("Scarlet & Violet", 0))[0]
+    # Require at least 8 cards moving to be worth writing about
+    scored = {k: sum(v) / len(v) for k, v in set_activity.items() if len(v) >= 8}
+    if not scored:
+        return {"set_name": "Unknown", "cards": [], "set_stats": {}}
 
+    best_set = max(scored.items(), key=lambda x: x[1])[0]
     set_cards = [normalise_card(c) for c in all_cards if c["set_name"] == best_set]
+    set_cards = filter_by_data_quality(set_cards)
     set_cards.sort(key=lambda x: abs(x.get("raw_pct_7d") or 0), reverse=True)
 
-    prices = [c["current_raw"] for c in set_cards if c.get("current_raw")]
-    risers = [c for c in set_cards if (c.get("raw_pct_7d") or 0) > 0]
+    prices  = [c["current_raw"] for c in set_cards if c.get("current_raw")]
+    risers  = [c for c in set_cards if (c.get("raw_pct_7d") or 0) > 0]
     fallers = [c for c in set_cards if (c.get("raw_pct_7d") or 0) < 0]
 
     return {
         "set_name": best_set,
         "cards": set_cards[:15],
         "set_stats": {
-            "total_cards": len(set_cards),
+            "total_cards_tracked": len(set_cards),
             "avg_price_usd": round(sum(prices) / len(prices), 2) if prices else 0,
             "risers_count": len(risers),
             "fallers_count": len(fallers),
@@ -216,18 +312,29 @@ def fetch_set_watch_data() -> dict:
 
 
 def fetch_sleepers_data() -> dict:
-    """Hidden gems — rising quietly, mainstream sets only."""
+    """
+    Cards with steady multi-month momentum — not spiky anomalies.
+    Requires movement across both 30d AND 90d to filter one-off jumps.
+    """
     res = (
         supabase.table("card_trends")
-        .select("card_slug, card_name, set_name, current_raw, raw_pct_30d, raw_pct_90d")
+        .select("card_slug, card_name, set_name, current_raw, current_psa10, raw_pct_30d, raw_pct_90d")
         .gt("raw_pct_30d", 5)
-        .gt("current_raw", 200)
-        .lt("current_raw", 5000)
+        .gt("raw_pct_90d", 5)          # must be moving on both timeframes
+        .lte("raw_pct_30d", MAX_PCT_30D)
+        .lte("raw_pct_90d", 500)       # 90d cap looser but still guarded
+        .gt("current_raw", MIN_RAW_CENTS)
+        .lt("current_raw", 30000)      # under $300 raw — genuine sleepers, not established staples
         .order("raw_pct_30d", desc=True)
-        .limit(50)
+        .limit(80)
         .execute()
     )
-    gems = [normalise_card(c) for c in (res.data or []) if is_allowed_set(c.get("set_name", ""))][:10]
+
+    gems = [
+        normalise_card(c) for c in (res.data or [])
+        if is_allowed_set(c.get("set_name", ""))
+    ]
+    gems = filter_by_data_quality(gems)[:10]
     return {"gems": gems}
 
 
@@ -246,35 +353,40 @@ def fetch_pulse_data() -> dict:
         return {"market_rows": [], "summary": {}}
 
     latest = rows[-1]
-    total = latest.get("total_raw_usd") or 0
+    total  = latest.get("total_raw_usd") or 0
     median = latest.get("median_raw_usd") or 0
-    # market_index stores values in cents (large numbers) — detect and convert
-    total_usd = round(total / 100, 0) if total > 1_000_000 else round(float(total), 0)
-    median_usd = round(median / 100, 2) if median > 10000 else round(float(median), 2)
+    # market_index stores in cents if values are large
+    total_usd  = round(total / 100, 0)  if total  > 1_000_000 else round(float(total), 0)
+    median_usd = round(median / 100, 2) if median > 10000     else round(float(median), 2)
 
     return {
         "market_rows": rows,
         "summary": {
             "current_total_usd": total_usd,
-            "median_card_usd": median_usd,
-            "pct_7d": latest.get("raw_pct_7d"),
-            "pct_30d": latest.get("raw_pct_30d"),
-            "date": latest.get("date"),
+            "median_card_usd":   median_usd,
+            "pct_7d":            latest.get("raw_pct_7d"),
+            "pct_30d":           latest.get("raw_pct_30d"),
+            "date":              latest.get("date"),
         }
     }
 
 
 def fetch_collector_data() -> dict:
-    """Top pull values by set — pack EV context."""
+    """Top pull values by set — pack EV context. Only $20+ cards worth discussing."""
     res = (
         supabase.table("card_trends")
-        .select("card_slug, card_name, set_name, current_raw, raw_pct_30d, raw_pct_90d")
-        .gt("current_raw", 1000)
+        .select("card_slug, card_name, set_name, current_raw, current_psa10, raw_pct_30d")
+        .gt("current_raw", MIN_RAW_CENTS)
         .order("current_raw", desc=True)
-        .limit(80)
+        .limit(100)
         .execute()
     )
-    cards = [normalise_card(c) for c in (res.data or []) if is_allowed_set(c.get("set_name", ""))]
+
+    cards = [
+        normalise_card(c) for c in (res.data or [])
+        if is_allowed_set(c.get("set_name", ""))
+    ]
+    cards = filter_by_data_quality(cards)
 
     from collections import defaultdict
     by_set = defaultdict(list)
@@ -293,8 +405,8 @@ def fetch_collector_data() -> dict:
         "all_sets_summary": [
             {
                 "set_name": k,
-                "top_pull_usd": round(max(c["current_raw"] for c in v), 2),
-                "cards_over_10_usd": len([c for c in v if c["current_raw"] >= 10.0]),
+                "top_pull_usd":      round(max(c["current_raw"] for c in v), 2),
+                "cards_over_20_usd": len([c for c in v if c["current_raw"] >= 20.0]),
             }
             for k, v in list(by_set.items())[:8]
         ]
@@ -302,22 +414,27 @@ def fetch_collector_data() -> dict:
 
 
 def fetch_history_data() -> dict:
-    """Pick a notable card from an allowed set and pull its full price history."""
+    """Pick a $20+ card from an allowed set with rich price history."""
     res = (
         supabase.table("card_trends")
-        .select("card_slug, card_name, set_name, current_raw, raw_pct_90d")
-        .gt("current_raw", 2000)
+        .select("card_slug, card_name, set_name, current_raw, current_psa10, raw_pct_90d")
+        .gt("current_raw", MIN_RAW_CENTS)
         .not_.is_("raw_pct_90d", "null")
         .order("current_raw", desc=True)
-        .limit(50)
+        .limit(80)
         .execute()
     )
-    candidates = [normalise_card(c) for c in (res.data or []) if is_allowed_set(c.get("set_name", ""))]
+
+    candidates = [
+        normalise_card(c) for c in (res.data or [])
+        if is_allowed_set(c.get("set_name", ""))
+    ]
+    candidates = filter_by_data_quality(candidates)
 
     if not candidates:
         return {"card": None, "history": []}
 
-    card = random.choice(candidates[:10])
+    card = random.choice(candidates[:15])
 
     history_res = (
         supabase.table("daily_prices")
@@ -341,90 +458,112 @@ def build_prompt(theme: str, theme_label: str, data: dict, today_str: str) -> st
     data_json = json.dumps(data, indent=2, default=str)
 
     theme_instructions = {
-        "movers": """Write about the biggest price movers in the Pokemon TCG this week.
-Lead with the most dramatic riser. Explain possible reasons (tournament play, content creator attention, set rotation, low supply).
-Cover 3-4 risers and 2-3 fallers in depth. Be analytical, not just descriptive.
-Headline: specific — name the top card and its % move.
-SEO: card name + "price" + "2026".""",
+        "movers": """
+Write about the most significant price moves in the Pokemon TCG this week.
+Focus on cards with meaningful value — these are $20+ cards that real collectors are watching.
+Lead with the strongest riser and explain what might be driving it: tournament results, content attention, supply constraints, rotation.
+Cover 3-4 risers and 2-3 fallers. For each, give context — is this a correction after a previous move, a trend reversal, or new momentum?
+Be honest about uncertainty. "This could be..." is fine. "This definitely means..." is not.
+The article should read like a knowledgeable friend analysing the week, not a price alert digest.
+Headline: name the top card and its move. Specific and factual.""",
 
-        "grading": """Write about grading economics — where the PSA 10 premium is most interesting right now.
-Pick 2-3 cards where the data tells an interesting story (high multiplier, low pop, surprising premium).
-Give honest grading advice — be specific about when it makes financial sense.
-Headline: frame as a question or reveal. E.g. "Is X Worth Grading Right Now?"
-SEO: "should I grade [card name]", "PSA 10 value 2026".""",
+        "grading": """
+Write about where the grading premium is genuinely interesting right now.
+Pick 2-3 cards where the PSA 10 multiplier or the pop count tells a real story.
+A high multiplier on a card with thin pop is very different from a high multiplier on a widely graded common.
+Give honest, practical grading advice. Talk about what a collector actually needs to consider: submission cost, turnaround time, the card's condition sensitivity, whether the raw market is liquid enough to compare against.
+Don't recommend grading everything. Be specific about when it makes financial sense and when it doesn't.
+The article should feel like advice from someone who has graded a lot of cards and learned what works.
+Headline: frame it as a practical question or a data-driven reveal.""",
 
-        "set_watch": """Write a deep dive on the set in the data — current market position, which cards are moving, what's driving it.
-Cover the set's age, standout cards, and overall trend direction. Use actual card names and prices from the data.
-Headline: name the set and hint at something surprising.
-SEO: "[set name] card prices 2026", "best cards from [set name]".""",
+        "set_watch": """
+Write a focused market analysis of the set in the data.
+Start by establishing where this set sits in the collecting landscape — its age, print run context if relevant, and how it's been performing over the last few months.
+Then drill into the specific cards moving this week. What's driving them? Are the expensive cards leading the set higher or is movement concentrated in mid-range cards?
+Give a view on the set's overall trajectory. Is this a set that's found its floor and is building, or one that's been in a longer rally that might be tiring?
+Use actual card names and prices throughout. Don't describe data vaguely.
+Headline: name the set and hint at the story — something surprising or specific.""",
 
-        "sleepers": """Write about cards quietly building momentum — ones serious collectors notice before the crowd.
-Be specific about why each card is interesting (low pop, rising trend, undervalued vs graded equivalent).
-Write like a knowledgeable collector, not a hype piece.
-Headline: create intrigue without clickbait. Use specific card names.
-SEO: "undervalued pokemon cards 2026", "pokemon cards to watch".""",
+        "sleepers": """
+Write about cards that have been building momentum steadily over weeks, not overnight spikes.
+The cards in this data show consistent movement across both 30-day and 90-day windows — that's the signal worth writing about.
+For each card, explain what makes it interesting. Is it undervalued relative to its graded equivalent? Is there a scarcity angle? Is it a card from a set that's getting collector attention?
+Be measured. Not every sleeper turns into a big move — acknowledge that. But explain why these particular cards are worth watching.
+Write like a collector who has done the homework, not like someone hyping picks.
+Headline: name specific cards, create intrigue without manufactured excitement.""",
 
-        "pulse": """Write the week's market overview. What happened overall? Up or down? What drove it?
-Connect macro trends to specific cards where possible. Include a short "what to watch next" section.
-Tone: weekly market newsletter — informed, direct, no fluff.
-Headline: state the market direction and hint at the cause.
-SEO: "pokemon TCG market 2026", "pokemon card prices this week".""",
+        "pulse": """
+Write the week's market overview. Give the big picture first — is the overall market up, down, flat?
+Then explain what's behind the movement. Are expensive cards driving the headline number while the mid-market is flat? Or is there broad movement across segments?
+Connect macro trends to 2-3 specific cards or sets where the data supports it.
+End with a short section on what's worth watching over the next week or two.
+Keep the tone of a clear-eyed weekly newsletter. Informed, concise, no padding.""",
 
-        "collector": """Write about whether a current set is worth buying sealed vs singles.
-Use pull rates and top card values to estimate pack EV. Be honest — most packs lose money, say so.
-Explain when sealed still makes sense (nostalgia, sealed grading, long hold).
-Headline: practical question. "Should You Open [Set]? The Numbers Say..."
-SEO: "pokemon booster box worth it 2026", "[set name] pack EV".""",
+        "collector": """
+Write about whether the featured set is genuinely worth buying sealed right now versus picking singles.
+Do the actual maths with the top cards in the data. Estimate what percentage of packs would need to hit for a box to break even at current prices.
+Be direct about what the numbers say. Most sealed product is not a good financial bet — say so when that's the case, but also explain the legitimate reasons collectors still buy it (sealed grading upside, the experience, long-term holds on low-print sets).
+Finish with a practical recommendation: singles, sealed, or neither.
+Headline: frame it as the practical question every collector faces before buying.""",
 
-        "history": """Write a long-term price analysis of the card in the data using its full price history.
-Identify key moments — peaks, crashes, recoveries — and what drove them.
-Conclude where it sits now relative to its history.
-Tone: analytical. Like a collector who has watched the market for years.
-Headline: card name + timeframe + insight hint.
-SEO: "[card name] price history", "[card name] value over time".""",
+        "history": """
+Write a long-form price analysis of the card in the data, using its full price history.
+Take the reader through the card's price journey chronologically. Identify the key inflection points — peaks, crashes, sustained rallies, extended flat periods — and offer your best explanation for each.
+Draw on what you know about the broader hobby context: set releases, grading surges, tournament metas, content creator effects.
+Conclude with where the card sits now relative to its own history. Is it at a historically elevated level, a historical low, or somewhere in the middle? What does that mean for collectors considering it?
+Tone: analytical and considered. Like someone who has watched this card's price for two years.
+Headline: name the card, hint at the insight the history reveals.""",
     }
 
-    return f"""You are writing for PokePrices.io — a free Pokemon TCG price intelligence platform.
-Tone: knowledgeable collector talking to other collectors. Direct, data-led, no hype, no fluff.
-Never use marketing language. Never say "delve", "dive in", "it's worth noting", "in conclusion".
-Write like a person, not an AI. Vary sentence length. Use the actual numbers from the data.
+    return f"""You are writing a market intelligence article for PokePrices.io — a free Pokemon TCG price platform used by serious collectors.
 
-CRITICAL: All prices in the data are already in USD dollars (e.g. 10.03 means $10.03, 249.50 means $249.50).
-Do NOT multiply or divide prices. Use them exactly as given.
+TONE AND STYLE:
+- Write like a knowledgeable collector talking to other knowledgeable collectors
+- Direct and data-led. Reference actual prices and percentages from the data
+- No hype, no marketing language, no manufactured excitement
+- Never use: "delve", "dive in", "it's worth noting", "in conclusion", "fascinating", "exciting"
+- Vary sentence length. Mix short punchy sentences with longer analytical ones
+- Write in flowing paragraphs. The analysis lives in the prose, not in bullet points
+- Card grids in the JSON are reference material — the writing should stand on its own
+
+CRITICAL — PRICES:
+All prices in the data are already in USD dollars (e.g. 24.50 means $24.50). Use them exactly.
+Do NOT multiply or divide any price values.
 
 Today: {today_str}
 Theme: {theme_label}
 
+ARTICLE BRIEF:
 {theme_instructions.get(theme, "")}
 
 DATA:
 {data_json}
 
-Return ONLY a valid JSON object. No markdown fences, no text before or after the JSON.
+Return ONLY a valid JSON object. No markdown fences, no text outside the JSON.
 
 {{
-  "headline": "Specific, SEO-optimised headline. Under 70 chars.",
-  "meta_title": "SEO title tag — card/set name + year. Under 60 chars.",
-  "meta_description": "140-160 chars. Target keyword used naturally.",
-  "hero_image_query": "3-5 word image search query. E.g. 'Charizard holo card close up'",
-  "intro": "2-3 sentences. Hook with the most interesting data point immediately.",
-  "slug_suffix": "url-friendly-suffix e.g. 'umbreon-vmax-price-surge'",
+  "headline": "Specific, direct headline. Under 70 chars. Name cards or sets where possible.",
+  "meta_title": "SEO title — card or set name + year. Under 60 chars.",
+  "meta_description": "140-160 chars. Natural language, target keyword included.",
+  "hero_image_query": "3-6 word image search query for the article thumbnail.",
+  "intro": "2-3 sentences. Lead with the most compelling data point. Make the reader want to continue.",
+  "slug_suffix": "url-friendly-suffix e.g. 'evolving-skies-charizard-vmax-rally'",
   "sections": [
     {{
       "type": "text",
-      "content": "Paragraph. 80-150 words. Reference specific cards and prices from the data."
-    }},
-    {{
-      "type": "chart",
-      "title": "Chart title",
-      "description": "One sentence on what this chart shows and why it matters.",
-      "card_slug": "pc-XXXXXXX",
-      "chart_kind": "line"
+      "content": "Well-written paragraph of analysis. 100-180 words. Specific prices and percentages from the data. Flows naturally from the previous section."
     }},
     {{
       "type": "card_grid",
-      "heading": "Heading for this group",
+      "heading": "Short label for this group of cards",
       "card_slugs": ["pc-XXXXXXX", "pc-XXXXXXX"]
+    }},
+    {{
+      "type": "chart",
+      "title": "Descriptive chart title",
+      "description": "One sentence on what the chart shows and why it matters to the article.",
+      "card_slug": "pc-XXXXXXX",
+      "chart_kind": "line"
     }}
   ],
   "card_refs": ["pc-XXXXXXX"],
@@ -432,13 +571,14 @@ Return ONLY a valid JSON object. No markdown fences, no text before or after the
   "tags": ["keyword1", "keyword2", "keyword3"]
 }}
 
-Rules:
-- 5-8 sections total, mix of text / chart / card_grid
-- Use real card_slugs from the data (they start with pc-)
-- card_grid: 2-6 cards per grid
-- chart: only include if there is a real card_slug from the data
-- Every text section must cite specific prices and % changes from the data
-- Total word count across all text sections: 400-600 words
+STRUCTURE RULES:
+- 5-8 sections total. Mix types but let text sections carry the weight of the analysis
+- Open with a text section. Close with a text section
+- card_grid sections should follow a text section that introduces those cards
+- chart sections: only use real card_slugs from the data
+- card_grid: 2-5 cards per grid
+- Total word count across all text sections: 450-650 words
+- Do not use more than 2 card_grid sections in one article
 """
 
 
@@ -454,19 +594,19 @@ def generate_article(theme: str, theme_label: str, data: dict, today: datetime) 
     try:
         response = claude.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=2000,
+            max_tokens=2500,
             messages=[{"role": "user", "content": prompt}]
         )
         raw = response.content[0].text.strip()
 
         start = raw.find('{')
-        end = raw.rfind('}')
+        end   = raw.rfind('}')
         if start == -1 or end == -1:
             print(f"  No JSON object found in response")
-            print(f"  Raw response: {raw[:500]}")
+            print(f"  Raw: {raw[:500]}")
             return None
 
-        article = json.loads(raw[start:end+1])
+        article = json.loads(raw[start:end + 1])
         return article
 
     except json.JSONDecodeError as e:
@@ -482,8 +622,8 @@ def generate_article(theme: str, theme_label: str, data: dict, today: datetime) 
 
 def build_slug(theme: str, suffix: str, today: datetime) -> str:
     date_str = today.strftime("%Y-%m-%d")
-    suffix = re.sub(r"[^a-z0-9-]", "", suffix.lower().replace(" ", "-"))
-    suffix = re.sub(r"-+", "-", suffix).strip("-")
+    suffix   = re.sub(r"[^a-z0-9-]", "", suffix.lower().replace(" ", "-"))
+    suffix   = re.sub(r"-+", "-", suffix).strip("-")
     return f"{date_str}-{theme}-{suffix}"
 
 
@@ -491,8 +631,8 @@ def build_slug(theme: str, suffix: str, today: datetime) -> str:
 
 def already_published_today(theme: str, today: datetime) -> bool:
     start = today.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timedelta(days=1)
-    res = (
+    end   = start + timedelta(days=1)
+    res   = (
         supabase.table("insights")
         .select("id")
         .eq("theme", theme)
@@ -507,7 +647,7 @@ def already_published_today(theme: str, today: datetime) -> bool:
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
 def main():
-    today = datetime.now(timezone.utc)
+    today   = datetime.now(timezone.utc)
     weekday = today.weekday()
     theme, theme_label = THEMES[weekday]
 
@@ -533,24 +673,35 @@ def main():
     data = fetchers[theme]()
     print(f"  Data fetched. Keys: {list(data.keys())}")
 
+    # Bail out early if we got no usable data (e.g. all cards filtered out)
+    data_values = list(data.values())
+    if all(
+        (isinstance(v, list) and len(v) == 0) or
+        (isinstance(v, dict) and len(v) == 0) or
+        v is None
+        for v in data_values
+    ):
+        print("  No usable data after quality filtering. Skipping article generation.")
+        sys.exit(0)
+
     article = generate_article(theme, theme_label, data, today)
     if not article:
         print("Article generation failed.")
         supabase.table("insights").insert({
-            "slug": f"{today.strftime('%Y-%m-%d')}-{theme}-error",
-            "theme": theme,
-            "theme_label": theme_label,
-            "published_at": today.isoformat(),
-            "headline": f"[Generation failed -- {theme_label}]",
-            "intro": "",
-            "meta_title": "",
+            "slug":             f"{today.strftime('%Y-%m-%d')}-{theme}-error",
+            "theme":            theme,
+            "theme_label":      theme_label,
+            "published_at":     today.isoformat(),
+            "headline":         f"[Generation failed -- {theme_label}]",
+            "intro":            "",
+            "meta_title":       "",
             "meta_description": "",
             "hero_image_query": "",
-            "body_json": [],
-            "card_refs": [],
-            "set_refs": [],
-            "status": "error",
-            "generation_log": "Claude returned invalid JSON or API error",
+            "body_json":        [],
+            "card_refs":        [],
+            "set_refs":         [],
+            "status":           "error",
+            "generation_log":   "Claude returned invalid JSON or API error",
         }).execute()
         sys.exit(1)
 
@@ -560,20 +711,20 @@ def main():
     print("Inserting into Supabase...")
     try:
         supabase.table("insights").insert({
-            "slug": slug,
-            "theme": theme,
-            "theme_label": theme_label,
-            "published_at": today.isoformat(),
-            "headline": article.get("headline", ""),
-            "intro": article.get("intro", ""),
-            "meta_title": article.get("meta_title", ""),
+            "slug":             slug,
+            "theme":            theme,
+            "theme_label":      theme_label,
+            "published_at":     today.isoformat(),
+            "headline":         article.get("headline", ""),
+            "intro":            article.get("intro", ""),
+            "meta_title":       article.get("meta_title", ""),
             "meta_description": article.get("meta_description", ""),
             "hero_image_query": article.get("hero_image_query", ""),
-            "body_json": article.get("sections", []),
-            "card_refs": article.get("card_refs", []),
-            "set_refs": article.get("set_refs", []),
-            "status": "published",
-            "generation_log": f"Generated {today.isoformat()}. Tags: {article.get('tags', [])}",
+            "body_json":        article.get("sections", []),
+            "card_refs":        article.get("card_refs", []),
+            "set_refs":         article.get("set_refs", []),
+            "status":           "published",
+            "generation_log":   f"Generated {today.isoformat()}. Tags: {article.get('tags', [])}",
         }).execute()
         print(f"  Inserted: {article.get('headline')}")
     except Exception as e:
