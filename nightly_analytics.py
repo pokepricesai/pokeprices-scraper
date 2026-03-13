@@ -3,14 +3,16 @@ nightly_analytics.py
 Runs after the main price scraper.
 Adds to: market_index, card_scores, set_scores
 
-v2 fixes:
+v3 fixes:
   - market_index: fetches all daily_prices in batches (was capped at 1,000)
-  - robust_trends: increased timeout to 120s
-  - weekly_report_cache: RPC SQL fix documented below
+  - robust_trends: statement_timeout set via direct REST call (header approach doesn't work)
+  - weekly_report_cache: wrapped in safe skip if RPC has SQL errors
+  - set_scores: deduplicate by set_name before upsert (fixes ON CONFLICT duplicate error)
 """
 
 import os
 import math
+import requests
 from datetime import date, timedelta
 from supabase import create_client
 
@@ -77,7 +79,6 @@ def get_nearest_market_index(target_date_str, window_days=5):
 def update_market_index():
     print("Updating market_index...")
 
-    # FIX: fetch ALL rows, not just first 1,000
     rows = fetch_all(
         "daily_prices",
         "card_slug, raw_usd, psa9_usd, psa10_usd",
@@ -116,17 +117,14 @@ def update_market_index():
         "total_cards_tracked":       len(rows),
     }
 
-    # Upsert today's row first so pct lookback can find recent rows
     supabase.table("market_index").upsert(record, on_conflict="date").execute()
 
-    # Compute pct changes using nearest available date
     for days, key in [(1, "raw_pct_1d"), (7, "raw_pct_7d"), (30, "raw_pct_30d")]:
         past_date = (date.today() - timedelta(days=days)).isoformat()
         past_val  = get_nearest_market_index(past_date, window_days=5)
         if past_val and past_val > 0:
             record[key] = round((record["total_raw_usd"] - past_val) / past_val * 100, 4)
 
-    # Re-upsert with pct values populated
     supabase.table("market_index").upsert(record, on_conflict="date").execute()
     print(f"  market_index updated: {len(rows)} cards, total raw ${sum(raw_prices)/100:,.0f}")
     print(f"  pct_1d={record.get('raw_pct_1d')} pct_7d={record.get('raw_pct_7d')} pct_30d={record.get('raw_pct_30d')}")
@@ -171,7 +169,6 @@ def volatility_label(v30d):
 def update_card_scores():
     print("Updating card_scores...")
 
-    # FIX: fetch all metrics in batches
     metrics_data = fetch_all(
         "metrics_daily",
         "card_slug, current_price, ath_price, ath_date, drawdown_pct, "
@@ -267,10 +264,25 @@ def update_card_scores():
 def refresh_robust_trends():
     print("Refreshing robust trend metrics...")
     try:
-        # FIX: use postgrest_params to set a longer statement timeout before calling the RPC
-        supabase.postgrest.session.headers.update({"statement_timeout": "120000"})
-        supabase.rpc('refresh_robust_trends').execute()
-        print("  robust_trends refresh complete")
+        # The Supabase Python client does not support per-request statement timeouts.
+        # Call the RPC via raw REST with a long timeout on the HTTP request instead.
+        # The real fix is the card_price_windows_mat materialized view — see SQL migration.
+        resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/refresh_robust_trends",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={},
+            timeout=300,  # 5 minutes — gives the function time to complete
+        )
+        if resp.status_code in (200, 204):
+            print("  robust_trends refresh complete")
+        else:
+            print(f"  ERROR refreshing robust trends: {resp.status_code} - {resp.text[:200]}")
+    except requests.exceptions.Timeout:
+        print("  ERROR refreshing robust trends: timed out after 300s — run SQL migration to create card_price_windows_mat")
     except Exception as e:
         print(f"  ERROR refreshing robust trends: {e}")
 
@@ -283,7 +295,18 @@ def refresh_weekly_report_cache():
         supabase.rpc('refresh_weekly_report_cache').execute()
         print("  weekly_report_cache refresh complete")
     except Exception as e:
-        print(f"  ERROR refreshing weekly report cache: {e}")
+        err = str(e)
+        if "does not exist" in err and "id" in err:
+            # The refresh_weekly_report_cache RPC has a SQL bug (references column "id"
+            # which does not exist on the target table). Skipping until fixed.
+            # To fix: run SELECT pg_get_functiondef(oid) FROM pg_proc
+            #         WHERE proname = 'refresh_weekly_report_cache';
+            # then recreate the function with the correct column name.
+            print("  SKIPPED weekly_report_cache — RPC has a SQL bug (column 'id' not found).")
+            print("  Run: SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = 'refresh_weekly_report_cache';")
+            print("  Then paste the result to fix the column reference.")
+        else:
+            print(f"  ERROR refreshing weekly report cache: {e}")
 
 
 # ── 5. SET SCORES ────────────────────────────────────────────
@@ -304,8 +327,21 @@ def update_set_scores():
         print("  No set_metrics_daily data")
         return
 
-    scores = []
+    # FIX: deduplicate by set_name — the fallback query can return the same set
+    # across multiple as_of dates, causing ON CONFLICT duplicate errors in one batch.
+    # Keep the most recent row for each set_name.
+    seen = {}
     for s in result.data:
+        name = s.get("set_name", "")
+        if not name:
+            continue
+        existing = seen.get(name)
+        if existing is None or s.get("as_of", "") > existing.get("as_of", ""):
+            seen[name] = s
+    deduped = list(seen.values())
+
+    scores = []
+    for s in deduped:
         total_val  = s.get("set_total_value") or 0
         pct_90d    = float(s.get("set_pct_90d") or 0)
         top1_share = float(s.get("top1_share_pct") or 100)
