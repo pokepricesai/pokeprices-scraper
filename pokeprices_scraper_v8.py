@@ -1,7 +1,7 @@
 """
-PokePrices Scraper v9
+PokePrices Scraper v8
 =====================
-Based on v8. Changes:
+Based on v7. Changes:
   - Added sales volume extraction from PriceCharting pages
   - Volume text (e.g. "1 sale per day", "2 sales per month") parsed to monthly figure
   - Monthly sales upserted into card_volume table (sales_30d field)
@@ -136,12 +136,12 @@ def build_url(console_name, product_name):
     console_slug = console_slug.replace("&", "&")
 
     slug = product_name.lower()
-slug = slug.replace("[", "").replace("]", "")
-slug = slug.replace("#", "")
-slug = re.sub(r"[^a-z0-9\s&]", '', slug)
-slug = slug.strip()
-slug = re.sub(r'\s+', '-', slug)
-slug = re.sub(r'-+', '-', slug)
+    slug = slug.replace("[", "").replace("]", "")
+    slug = slug.replace("#", "")
+    slug = re.sub(r"[^a-z0-9\s&]", '', slug)
+    slug = slug.strip()
+    slug = re.sub(r'\s+', '-', slug)
+    slug = re.sub(r'-+', '-', slug)
     return f"https://www.pricecharting.com/game/{console_slug}/{slug}"
 
 
@@ -188,7 +188,7 @@ def extract_historical_prices(html):
 
 
 # ============================================
-# v9: VOLUME EXTRACTION
+# VOLUME EXTRACTION
 # ============================================
 
 def extract_sales_volume(html):
@@ -201,23 +201,10 @@ def extract_sales_volume(html):
       "1 sale per month", "2 sales per month"
       "1 sale per year", "1 sale per 2 years"
 
-    These appear near the grade price cells, typically in a
-    <span class="volume"> or similar element.
-
-    We extract the "Ungraded" / raw volume since that's what
-    maps to our sales_30d field.
-
-    Returns approximate monthly sales as a float, or None.
+    Returns approximate monthly sales as an integer, or None.
     """
-
-    # PriceCharting volume text patterns — appears as plain text near price cells
-    # Try to find volume associated with "used" (ungraded/raw) price first
-    # then fall back to any volume text on the page
-
     volume_patterns = [
-        # Inside a volume span/div near the used price section
         r'id=["\']used_price["\'].*?volume["\']?\s*[^>]*>([^<]+sale[^<]+)',
-        # Generic volume text anywhere
         r'class=["\']volume["\'][^>]*>\s*([^<]*\d+\s+sale[^<]*)',
         r'<span[^>]*>\s*(\d+\s+sales?\s+per\s+(?:day|week|month|year)[^<]*)\s*</span>',
         r'volume["\']?\s*[^>]*>\s*([^<]*\d+[^<]*sale[^<]*)',
@@ -228,7 +215,6 @@ def extract_sales_volume(html):
         match = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
         if match:
             candidate = match.group(1).strip()
-            # Make sure it actually contains sale volume info
             if re.search(r'\d+\s+sales?\s+per', candidate, re.IGNORECASE):
                 volume_text = candidate
                 break
@@ -257,13 +243,11 @@ def parse_volume_to_monthly(text):
     """
     text = text.lower().strip()
 
-    # Extract number of sales
     sales_match = re.search(r'(\d+(?:\.\d+)?)\s+sales?', text)
     if not sales_match:
         return None
     sales_count = float(sales_match.group(1))
 
-    # Extract period
     if 'per day' in text:
         monthly = sales_count * 30
     elif 'per week' in text:
@@ -277,7 +261,6 @@ def parse_volume_to_monthly(text):
     else:
         return None
 
-    # Round to nearest integer, minimum 1 if any sales found
     return max(1, round(monthly))
 
 
@@ -466,7 +449,7 @@ def main():
     est_seconds = len(cards) * (REQUEST_DELAY + 0.8)
 
     print(f"\n{'='*60}")
-    print(f"PokePrices Scraper v9 — {history_label}")
+    print(f"PokePrices Scraper v8 — {history_label}")
     print(f"{'='*60}")
     if set_filter:
         print(f"Set:      {set_filter}")
@@ -509,7 +492,7 @@ def main():
         found += 1
         records = []
 
-        # v8: image extraction
+        # Image extraction
         if html:
             image_url = extract_image_url(html)
             if image_url or url:
@@ -518,7 +501,7 @@ def main():
                     images_saved += 1
                     print(f"  🖼  Image saved")
 
-        # v9: volume extraction
+        # Volume extraction
         if html:
             sales_monthly = extract_sales_volume(html)
             if sales_monthly is not None:
