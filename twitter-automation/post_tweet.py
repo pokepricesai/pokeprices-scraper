@@ -38,11 +38,11 @@ CATEGORIES = {
 # ── DATA FETCHERS ─────────────────────────────────────────────────────────────
 
 def get_top_mover():
-    """Get the best genuine mover — filters out sealed product and thin volume."""
+    """Get the best genuine mover - filters out sealed product and thin volume."""
     try:
         result = supabase.rpc("get_top_risers_filtered", {
             "time_period": "7d",
-            "min_price": 2000,   # min $20 raw to filter junk
+            "min_price": 2000,
             "card_filter": None
         }).execute()
 
@@ -52,11 +52,10 @@ def get_top_mover():
 
         results = data.get("results", []) if isinstance(data, dict) else []
 
-        # Filter: must have real volume, exclude sealed, exclude crazy % gains (single sale)
         filtered = [
             r for r in results
             if r.get("pct_change") is not None
-            and 5 <= r["pct_change"] <= 150  # 5-150% — genuine moves only
+            and 5 <= r["pct_change"] <= 150
             and r.get("card_name")
             and not any(x in r["card_name"].lower() for x in [
                 "booster box", "etb", "elite trainer", "collection box",
@@ -67,15 +66,18 @@ def get_top_mover():
         if not filtered:
             return None
 
-        card = filtered[0]
-        raw_usd = card.get("current_raw", 0) / 100
+        # Vary which card we pick - not always the top one
+        day_of_year = datetime.now().timetuple().tm_yday
+        pick = filtered[day_of_year % min(3, len(filtered))]
+
+        raw_usd = pick.get("current_raw", 0) / 100
         raw_gbp = raw_usd / 1.27
-        pct = card["pct_change"]
+        pct = pick["pct_change"]
 
         return {
             "type": "top_mover",
-            "card_name": card["card_name"],
-            "set_name": card.get("set_name", ""),
+            "card_name": pick["card_name"],
+            "set_name": pick.get("set_name", ""),
             "pct_change": round(pct, 1),
             "raw_usd": round(raw_usd, 2),
             "raw_gbp": round(raw_gbp, 2),
@@ -88,27 +90,51 @@ def get_top_mover():
 
 
 def get_psa_pop_insight():
-    """Find a card with interesting PSA population stats."""
+    """Find a card with interesting PSA population stats - varies the angle."""
     try:
-        # Get cards with very low gem rates — interesting rarity angle
-        result = supabase.from_("psa_population") \
-            .select("card_name, set_name, psa_10, total_graded, gem_rate, card_number") \
-            .gt("total_graded", 500) \
-            .lt("gem_rate", 3) \
-            .gt("psa_10", 10) \
-            .order("gem_rate", desc=False) \
-            .limit(20) \
-            .execute()
+        day_of_year = datetime.now().timetuple().tm_yday
+        angle = day_of_year % 3  # rotate between 3 different angles
+
+        if angle == 0:
+            # Very low gem rate - rarity angle
+            result = supabase.from_("psa_population") \
+                .select("card_name, set_name, psa_10, total_graded, gem_rate, card_number") \
+                .gt("total_graded", 500) \
+                .lt("gem_rate", 3) \
+                .gt("psa_10", 10) \
+                .order("gem_rate", desc=False) \
+                .limit(20) \
+                .execute()
+            angle_label = "low_gem_rate"
+        elif angle == 1:
+            # High total graded - most popular grading targets
+            result = supabase.from_("psa_population") \
+                .select("card_name, set_name, psa_10, total_graded, gem_rate, card_number") \
+                .gt("total_graded", 5000) \
+                .order("total_graded", desc=True) \
+                .limit(20) \
+                .execute()
+            angle_label = "most_graded"
+        else:
+            # High gem rate - modern easy grades
+            result = supabase.from_("psa_population") \
+                .select("card_name, set_name, psa_10, total_graded, gem_rate, card_number") \
+                .gt("total_graded", 1000) \
+                .gt("gem_rate", 50) \
+                .order("gem_rate", desc=True) \
+                .limit(20) \
+                .execute()
+            angle_label = "high_gem_rate"
 
         rows = result.data or []
         if not rows:
             return None
 
-        # Pick a random one from top 10 to vary content
         card = random.choice(rows[:10])
 
         return {
             "type": "psa_pop_insight",
+            "angle": angle_label,
             "card_name": card["card_name"],
             "set_name": card.get("set_name", "").replace("Pokemon ", ""),
             "total_graded": card["total_graded"],
@@ -125,7 +151,6 @@ def get_set_release():
     """Get upcoming or very recent set release."""
     try:
         today = datetime.now(timezone.utc).date().isoformat()
-        # Look 60 days ahead
         future = (datetime.now(timezone.utc) + timedelta(days=60)).date().isoformat()
 
         result = supabase.from_("release_calendar") \
@@ -139,7 +164,6 @@ def get_set_release():
         releases = result.data or []
 
         if not releases:
-            # Fall back to recent releases
             recent = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
             result2 = supabase.from_("release_calendar") \
                 .select("*") \
@@ -185,11 +209,10 @@ def get_underpriced_deal():
         if not deals:
             return None
 
-        # Filter out sealed product and very cheap cards
         filtered = [
             d for d in deals
             if d.get("card_name")
-            and d.get("listing_price_cents", 0) > 500  # min $5
+            and d.get("listing_price_cents", 0) > 500
             and not any(x in (d.get("card_name") or "").lower() for x in [
                 "booster box", "etb", "elite trainer", "tin", "bundle"
             ])
@@ -198,7 +221,10 @@ def get_underpriced_deal():
         if not filtered:
             return None
 
-        deal = filtered[0]
+        # Rotate through top deals for variety
+        day_of_year = datetime.now().timetuple().tm_yday
+        deal = filtered[day_of_year % min(5, len(filtered))]
+
         listing_price = deal.get("listing_price_cents", 0) / 100
         fair_value = deal.get("fair_value_cents", 0) / 100
         listing_gbp = listing_price / 1.27
@@ -220,46 +246,80 @@ def get_underpriced_deal():
 
 
 def get_grading_tip():
-    """Returns a rotating grading tip — no DB query needed, pure knowledge."""
+    """Returns a rotating grading tip - varied angles, human tone."""
     tips = [
         {
             "tip": "centering",
-            "fact": "PSA 10 requires 60/40 centering front, 75/25 back. A card that looks slightly off-centre can still gem if the back is clean.",
+            "fact": "PSA 10 needs 60/40 centering front, 75/25 back. A card that looks slightly off-centre can still gem if the back is tight. Always check both sides before deciding not to submit.",
             "url": f"{BASE_URL}/browse",
         },
         {
             "tip": "whitening",
-            "fact": "Minor corner whitening on the back is one of the most common reasons a card gets PSA 9 instead of 10 — it does NOT mean the card can't grade well. PSA 9 is still excellent.",
+            "fact": "Minor corner whitening on the back is the most common reason cards get PSA 9 instead of 10. It does not prevent a 9. Factory whitening from packs grades 9 all the time.",
             "url": f"{BASE_URL}/browse",
         },
         {
             "tip": "graders_uk",
-            "fact": "UK grading costs via consolidator: PSA ~£17.50 (45+ days), CGC ~£10 (15 days), ACE ~£12 (days not months). PSA carries the biggest resale premium for vintage.",
+            "fact": "UK grading costs via consolidator: PSA around 17.50 pounds (45+ days), CGC around 10 pounds (15 days), ACE around 12 pounds (days not months). PSA carries the biggest resale premium on vintage.",
             "url": f"{BASE_URL}/browse",
         },
         {
             "tip": "gem_rates",
-            "fact": "Gem rates by era: vintage 1999-2003 = 1-5%, mid era 2004-2016 = 5-15%, modern 2017+ = 30-60%. Lower gem rate = scarcer PSA 10s = higher premiums.",
+            "fact": "Gem rates by era: vintage 1999-2003 is 1-5%, mid era 2004-2016 is 5-15%, modern 2017+ is 30-60%. Lower gem rate means scarcer PSA 10s and higher premiums when they do exist.",
             "url": f"{BASE_URL}/browse",
         },
         {
             "tip": "psa_vs_cgc",
-            "fact": "CGC is cheaper and faster than PSA, but PSA 10s command a bigger resale premium on vintage cards. For modern cards the gap is smaller — CGC is often better value.",
+            "fact": "CGC is cheaper and faster than PSA but PSA 10s command a bigger resale premium on vintage. For modern the gap is smaller. Match your grader to your exit strategy.",
             "url": f"{BASE_URL}/browse",
         },
         {
             "tip": "grade_value",
-            "fact": "If the PSA 10 is more than 3x the PSA 9 price, the 9 is usually better value. If PSA 9 is less than 2x raw, just buy raw — grading cost doesn't justify the premium.",
+            "fact": "If the PSA 10 is more than 3x the PSA 9 price, the 9 is usually better value. If PSA 9 is under 2x raw, just buy raw. Grading only makes sense when the premium justifies the cost and wait.",
             "url": f"{BASE_URL}/browse",
         },
         {
             "tip": "fake_detection",
-            "fact": "Quick fake card check: hold it to light — real cards have a black inner layer. Check font, holo pattern, and card stock thickness. If the price seems too good to be true, verify the PSA cert at psacard.com.",
+            "fact": "Quick fake card check: hold to light and look for the black inner layer. Real cards have it, fakes usually do not. Also check font consistency, holo pattern, and card stock thickness.",
+            "url": f"{BASE_URL}/browse",
+        },
+        {
+            "tip": "what_to_grade",
+            "fact": "Not everything is worth grading. Rule of thumb: the PSA 10 sale price needs to exceed raw price plus grading cost plus your time. For most modern bulk, it does not.",
+            "url": f"{BASE_URL}/browse",
+        },
+        {
+            "tip": "surface_scratches",
+            "fact": "Holo scratches are one of the hardest things to see under normal light. Check your holos at an angle under a bright lamp before submitting. What looks mint flat often has scratches when angled.",
+            "url": f"{BASE_URL}/browse",
+        },
+        {
+            "tip": "pack_fresh",
+            "fact": "Pack fresh does not mean PSA 10. Base Set cards came out of packs with print lines, whitening, and centering issues. Vintage gem rates are low for a reason.",
+            "url": f"{BASE_URL}/browse",
+        },
+        {
+            "tip": "ace_grader",
+            "fact": "ACE Grading is the fastest option in the UK right now - turnaround in days not months, around 12 pounds via consolidator. Growing resale acceptance but PSA still dominates the premium end.",
+            "url": f"{BASE_URL}/browse",
+        },
+        {
+            "tip": "buy_or_grade",
+            "fact": "Buying a PSA 9 is often smarter than grading raw. You skip the risk of getting an 8, the wait, and the cost. Only grade yourself if you have high confidence in the card condition.",
+            "url": f"{BASE_URL}/browse",
+        },
+        {
+            "tip": "shadowless",
+            "fact": "Shadowless Base Set cards have no drop shadow on the right side of the artwork box. They are rarer than unlimited but not 1st Edition. The stamp is what makes a 1st Ed - shadowless without it is still unlimited print run.",
+            "url": f"{BASE_URL}/browse",
+        },
+        {
+            "tip": "japanese_grading",
+            "fact": "Japanese cards have better print quality and gem at higher rates than English equivalents. If you are grading for a collection rather than UK resale, Japanese PSA 10s are easier and cheaper to achieve.",
             "url": f"{BASE_URL}/browse",
         },
     ]
 
-    # Rotate by day of year so it's consistent but changes daily
     day_of_year = datetime.now().timetuple().tm_yday
     tip = tips[day_of_year % len(tips)]
     return {"type": "grading_tip", **tip}
@@ -279,7 +339,6 @@ def get_market_trend():
             return None
 
         latest = rows[0]
-        prev = rows[1]
 
         pct_7d = latest.get("raw_pct_7d")
         pct_30d = latest.get("raw_pct_30d")
@@ -306,24 +365,48 @@ def get_market_trend():
 
 
 def get_data_fact():
-    """Interesting data fact — most graded card, rarest gem, etc."""
+    """Interesting data fact - rotates between different angles."""
     try:
-        # Most graded card in our PSA population data
-        result = supabase.from_("psa_population") \
-            .select("card_name, set_name, total_graded, psa_10, gem_rate") \
-            .order("total_graded", desc=True) \
-            .limit(10) \
-            .execute()
+        day_of_year = datetime.now().timetuple().tm_yday
+        angle = day_of_year % 3
+
+        if angle == 0:
+            # Most graded cards
+            result = supabase.from_("psa_population") \
+                .select("card_name, set_name, total_graded, psa_10, gem_rate") \
+                .order("total_graded", desc=True) \
+                .limit(10) \
+                .execute()
+            fact_type = "most_graded"
+        elif angle == 1:
+            # Cards with most PSA 10s
+            result = supabase.from_("psa_population") \
+                .select("card_name, set_name, total_graded, psa_10, gem_rate") \
+                .gt("psa_10", 100) \
+                .order("psa_10", desc=True) \
+                .limit(10) \
+                .execute()
+            fact_type = "most_tens"
+        else:
+            # Cards with fewest PSA 10s despite high submission volume
+            result = supabase.from_("psa_population") \
+                .select("card_name, set_name, total_graded, psa_10, gem_rate") \
+                .gt("total_graded", 1000) \
+                .lt("psa_10", 20) \
+                .order("total_graded", desc=True) \
+                .limit(10) \
+                .execute()
+            fact_type = "fewest_tens"
 
         rows = result.data or []
         if not rows:
             return None
 
-        day_of_year = datetime.now().timetuple().tm_yday
         card = rows[day_of_year % len(rows)]
 
         return {
             "type": "data_fact",
+            "fact_type": fact_type,
             "card_name": card["card_name"],
             "set_name": card.get("set_name", "").replace("Pokemon ", ""),
             "total_graded": card["total_graded"],
@@ -355,7 +438,6 @@ def get_data_for_today():
 
     data = fetchers[category]()
 
-    # Fallback chain if primary fails
     if not data:
         print(f"Primary category {category} returned no data, trying fallbacks")
         fallback_order = ["grading_tip", "market_trend", "psa_pop_insight", "top_mover", "data_fact"]
@@ -373,27 +455,44 @@ def get_data_for_today():
 
 TWEET_SYSTEM_PROMPT = """You write daily tweets for @pokepricesio — a free Pokemon TCG price intelligence platform for UK collectors.
 
-RULES:
-- Max 250 characters (leaving room for URL)
-- No hashtags unless they add real value — maximum 2 if used
-- No emojis unless genuinely useful — maximum 2
-- No promotional language, no "check us out", no "we built"
-- Write like a knowledgeable collector sharing a useful fact, not a brand
-- Always include the URL provided in the data at the end
-- Be specific with numbers — vague tweets get ignored
-- Tone: direct, useful, occasionally opinionated. Never corporate.
-- Do not start with "Did you know" — it's weak
-- Do not use exclamation marks
+TONE AND STYLE:
+- Sound like a knowledgeable collector, not a brand or a bot
+- Direct and confident. Occasionally opinionated. Never corporate.
+- Vary your sentence structure — do not always lead with the card name
+- Sometimes start with the insight, sometimes with a question, sometimes with a stat
+- Human voice — someone who actually collects and cares about this stuff
 
-GOOD examples:
-"Umbreon VMAX alt art up 12% in 7 days — now at £1,380 raw. Volume is real: 18 UK sales this month. pokeprices.io/set/Evolving%20Skies"
-"PSA 10 gem rate on Base Set Charizard: under 2%. Of 4,200+ graded, only 81 are tens. That's why they command what they do. pokeprices.io"
-"Grading tip: minor corner whitening doesn't kill a PSA 9. It's one of the most common reasons cards get 9 instead of 10 — still excellent. pokeprices.io"
+HARD RULES:
+- Max 250 characters excluding the URL
+- Always include the URL from the data at the very end on its own line
+- No hashtags at all — they look spammy
+- No emojis unless one genuinely adds meaning (max 1 if used)
+- No exclamation marks
+- Never start with "Did you know"
+- No promotional language ("check us out", "we built", "our platform")
+- Be specific — exact numbers beat vague claims every time
+- Never repeat the same tweet structure two days in a row
 
-BAD examples:
-"Check out our amazing price tracker! 🎉🎉 #Pokemon #TCG"
-"Did you know Charizard is valuable? Find out more at our website!"
+VARIED OPENINGS — mix these up:
+- Start with a number: "Only 47 PSA 10s exist for..."
+- Start with a question: "Why is Chilling Reign holding better than Vivid Voltage?"
+- Start with a fact: "Gem rate on Base Set Charizard is under 2%..."
+- Start with an observation: "The gap between PSA 9 and PSA 10 on Moonbreon is narrowing..."
+- Start with advice: "If you are grading Base Set, check your centering on the back first..."
+
+GOOD tweet examples:
+"Only 81 PSA 10s exist for Base Set Charizard out of 4,200+ graded. That 1.9% gem rate is why they hold value the way they do. pokeprices.io"
+"Umbreon VMAX alt art up 12% this week — now at £1,380 raw. 18 sales in 30 days, so this is real demand not a single spike. pokeprices.io"
+"Minor corner whitening does not kill a PSA 9. It is the most common reason cards get 9 instead of 10. Do not talk yourself out of submitting. pokeprices.io"
+"First Partner Illustration Collection drops in 2 days. Singles will spike then correct — wait 6-8 weeks after release to buy at better prices. pokeprices.io"
+"The overall market is up 8.2% in 7 days across 38,000+ tracked cards. Broad moves like this usually mean institutional buying, not retail hype. pokeprices.io"
+
+BAD tweet examples:
+"Check out our amazing price tracker! Great deals available now!"
+"Did you know Charizard is one of the most valuable cards? #Pokemon #TCG"
+"We have data on 40000 cards. Visit our website to learn more!"
 """
+
 
 def generate_tweet(data: dict) -> str:
     """Call Claude to generate a tweet from the data."""
@@ -413,7 +512,7 @@ def generate_tweet(data: dict) -> str:
             "messages": [
                 {
                     "role": "user",
-                    "content": f"Write a tweet using this data:\n\n{data_str}"
+                    "content": f"Write a tweet using this data. Make it feel human and vary the structure from yesterday. Data:\n\n{data_str}"
                 }
             ],
         },
@@ -422,14 +521,12 @@ def generate_tweet(data: dict) -> str:
 
     result = response.json()
 
-    # Debug: print full response if content missing
     if "content" not in result:
         print(f"Claude API error response: {result}")
         raise Exception(f"Claude API failed: {result.get('error', result)}")
 
     tweet = result["content"][0]["text"].strip()
 
-    # Safety check - truncate if over limit
     if len(tweet) > 280:
         tweet = tweet[:277] + "..."
 
@@ -441,8 +538,7 @@ def generate_tweet(data: dict) -> str:
 def post_to_buffer(tweet_text: str) -> bool:
     """Post tweet to Buffer via GraphQL API."""
 
-    # Schedule for 9am UK time tomorrow (or today if run early)
-    now_uk = datetime.now(timezone(timedelta(hours=1)))  # BST approximation
+    now_uk = datetime.now(timezone(timedelta(hours=1)))
     scheduled = now_uk.replace(hour=9, minute=0, second=0, microsecond=0)
     if scheduled <= now_uk:
         scheduled += timedelta(days=1)
@@ -496,7 +592,7 @@ def post_to_buffer(tweet_text: str) -> bool:
 
     post_data = result.get("data", {}).get("createPost", {})
     if post_data.get("id"):
-        print(f"Posted successfully! Buffer post ID: {post_data['id']}")
+        print(f"Posted successfully. Buffer post ID: {post_data['id']}")
         print(f"Scheduled for: {post_data.get('dueAt')}")
         return True
     elif post_data.get("message"):
@@ -525,7 +621,6 @@ def log_to_supabase(tweet_text: str, data: dict, success: bool):
 def main():
     print(f"Running PokePrices Twitter automation — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
 
-    # 1. Get data
     data = get_data_for_today()
     if not data:
         print("ERROR: No data available for any category. Exiting.")
@@ -534,14 +629,11 @@ def main():
     print(f"Category: {data['type']}")
     print(f"Data: {json.dumps(data, indent=2)}")
 
-    # 2. Generate tweet
     tweet = generate_tweet(data)
     print(f"\nGenerated tweet ({len(tweet)} chars):\n{tweet}")
 
-    # 3. Post to Buffer
     success = post_to_buffer(tweet)
 
-    # 4. Log
     log_to_supabase(tweet, data, success)
 
     if success:
