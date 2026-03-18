@@ -421,9 +421,15 @@ def generate_tweet(data: dict) -> str:
     )
 
     result = response.json()
+
+    # Debug: print full response if content missing
+    if "content" not in result:
+        print(f"Claude API error response: {result}")
+        raise Exception(f"Claude API failed: {result.get('error', result)}")
+
     tweet = result["content"][0]["text"].strip()
 
-    # Safety check — truncate if over limit
+    # Safety check - truncate if over limit
     if len(tweet) > 280:
         tweet = tweet[:277] + "..."
 
