@@ -558,9 +558,7 @@ def post_to_buffer(tweet_text: str) -> bool:
             "channelId": BUFFER_CHANNEL_ID,
             "text": tweet_text,
             "schedulingType": "automatic",
-            "dueAt": due_at,
             "mode": "shareNow",
-            "aiAssisted": False,
         }
     }
 
