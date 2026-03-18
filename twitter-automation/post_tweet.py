@@ -74,15 +74,17 @@ def get_top_mover():
         raw_gbp = raw_usd / 1.27
         pct = pick["pct_change"]
 
+        set_name = pick.get("set_name", "")
+        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else f"{BASE_URL}/browse"
         return {
             "type": "top_mover",
             "card_name": pick["card_name"],
-            "set_name": pick.get("set_name", ""),
+            "set_name": set_name,
             "pct_change": round(pct, 1),
             "raw_usd": round(raw_usd, 2),
             "raw_gbp": round(raw_gbp, 2),
             "period": "7 days",
-            "url": f"{BASE_URL}/browse",
+            "url": set_url,
         }
     except Exception as e:
         print(f"get_top_mover error: {e}")
@@ -132,15 +134,17 @@ def get_psa_pop_insight():
 
         card = random.choice(rows[:10])
 
+        set_name = card.get("set_name", "").replace("Pokemon ", "")
+        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else f"{BASE_URL}/browse"
         return {
             "type": "psa_pop_insight",
             "angle": angle_label,
             "card_name": card["card_name"],
-            "set_name": card.get("set_name", "").replace("Pokemon ", ""),
+            "set_name": set_name,
             "total_graded": card["total_graded"],
             "psa_10_count": card["psa_10"],
             "gem_rate": round(card["gem_rate"], 2),
-            "url": f"{BASE_URL}/browse",
+            "url": set_url,
         }
     except Exception as e:
         print(f"get_psa_pop_insight error: {e}")
@@ -181,13 +185,15 @@ def get_set_release():
         release_date = datetime.fromisoformat(next_release["release_date"])
         days_away = (release_date.date() - datetime.now(timezone.utc).date()).days
 
+        set_name = next_release["set_name"]
+        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}"
         return {
             "type": "set_release",
-            "set_name": next_release["set_name"],
+            "set_name": set_name,
             "release_date": release_date.strftime("%d %B %Y"),
             "days_away": days_away,
             "confirmed": next_release.get("confirmed", True),
-            "url": f"{BASE_URL}/browse",
+            "url": set_url,
             "all_upcoming": [r["set_name"] for r in releases[1:3]],
         }
     except Exception as e:
@@ -251,73 +257,59 @@ def get_grading_tip():
         {
             "tip": "centering",
             "fact": "PSA 10 needs 60/40 centering front, 75/25 back. A card that looks slightly off-centre can still gem if the back is tight. Always check both sides before deciding not to submit.",
-            "url": f"{BASE_URL}/browse",
         },
         {
             "tip": "whitening",
             "fact": "Minor corner whitening on the back is the most common reason cards get PSA 9 instead of 10. It does not prevent a 9. Factory whitening from packs grades 9 all the time.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "graders_uk",
             "fact": "UK grading costs via consolidator: PSA around 17.50 pounds (45+ days), CGC around 10 pounds (15 days), ACE around 12 pounds (days not months). PSA carries the biggest resale premium on vintage.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "gem_rates",
             "fact": "Gem rates by era: vintage 1999-2003 is 1-5%, mid era 2004-2016 is 5-15%, modern 2017+ is 30-60%. Lower gem rate means scarcer PSA 10s and higher premiums when they do exist.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "psa_vs_cgc",
             "fact": "CGC is cheaper and faster than PSA but PSA 10s command a bigger resale premium on vintage. For modern the gap is smaller. Match your grader to your exit strategy.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "grade_value",
             "fact": "If the PSA 10 is more than 3x the PSA 9 price, the 9 is usually better value. If PSA 9 is under 2x raw, just buy raw. Grading only makes sense when the premium justifies the cost and wait.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "fake_detection",
             "fact": "Quick fake card check: hold to light and look for the black inner layer. Real cards have it, fakes usually do not. Also check font consistency, holo pattern, and card stock thickness.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "what_to_grade",
             "fact": "Not everything is worth grading. Rule of thumb: the PSA 10 sale price needs to exceed raw price plus grading cost plus your time. For most modern bulk, it does not.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "surface_scratches",
             "fact": "Holo scratches are one of the hardest things to see under normal light. Check your holos at an angle under a bright lamp before submitting. What looks mint flat often has scratches when angled.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "pack_fresh",
             "fact": "Pack fresh does not mean PSA 10. Base Set cards came out of packs with print lines, whitening, and centering issues. Vintage gem rates are low for a reason.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "ace_grader",
             "fact": "ACE Grading is the fastest option in the UK right now - turnaround in days not months, around 12 pounds via consolidator. Growing resale acceptance but PSA still dominates the premium end.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "buy_or_grade",
             "fact": "Buying a PSA 9 is often smarter than grading raw. You skip the risk of getting an 8, the wait, and the cost. Only grade yourself if you have high confidence in the card condition.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "shadowless",
             "fact": "Shadowless Base Set cards have no drop shadow on the right side of the artwork box. They are rarer than unlimited but not 1st Edition. The stamp is what makes a 1st Ed - shadowless without it is still unlimited print run.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
         {
             "tip": "japanese_grading",
             "fact": "Japanese cards have better print quality and gem at higher rates than English equivalents. If you are grading for a collection rather than UK resale, Japanese PSA 10s are easier and cheaper to achieve.",
-            "url": f"{BASE_URL}/browse",
-        },
+        }},
     ]
 
     day_of_year = datetime.now().timetuple().tm_yday
@@ -357,7 +349,6 @@ def get_market_trend():
             "direction": direction,
             "cards_tracked": cards_tracked,
             "median_raw_usd": round(median_raw, 2),
-            "url": f"{BASE_URL}/browse",
         }
     except Exception as e:
         print(f"get_market_trend error: {e}")
@@ -404,15 +395,17 @@ def get_data_fact():
 
         card = rows[day_of_year % len(rows)]
 
+        set_name = card.get("set_name", "").replace("Pokemon ", "")
+        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else f"{BASE_URL}/browse"
         return {
             "type": "data_fact",
             "fact_type": fact_type,
             "card_name": card["card_name"],
-            "set_name": card.get("set_name", "").replace("Pokemon ", ""),
+            "set_name": set_name,
             "total_graded": card["total_graded"],
             "psa_10_count": card.get("psa_10", 0),
             "gem_rate": round(card.get("gem_rate", 0), 1),
-            "url": f"{BASE_URL}/browse",
+            "url": set_url,
         }
     except Exception as e:
         print(f"get_data_fact error: {e}")
@@ -464,7 +457,7 @@ TONE AND STYLE:
 
 HARD RULES:
 - Max 250 characters excluding the URL
-- Always include the URL from the data at the very end on its own line
+- Only include the URL if it contains "/set/" or "/card/" — meaning it links to a specific set or card page on PokePrices. If the URL is just "pokeprices.io/browse" or the base domain, leave it out entirely. Links to generic pages hurt reach on X — only link when it adds real value for the reader
 - No hashtags at all — they look spammy
 - No emojis unless one genuinely adds meaning (max 1 if used)
 - No exclamation marks
