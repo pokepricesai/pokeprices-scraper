@@ -14,7 +14,7 @@ from supabase import create_client
 # ── ENV ───────────────────────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-CLAUDE_API_KEY = os.environ["CLAUDE_API_KEY"]
+CLAUDE_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 BUFFER_TOKEN = os.environ["BUFFER_ACCESS_TOKEN"]
 BUFFER_ORG_ID = os.environ["BUFFER_ORGANIZATION_ID"]
 BUFFER_CHANNEL_ID = os.environ["BUFFER_CHANNEL_ID"]
