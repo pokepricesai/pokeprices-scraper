@@ -538,12 +538,12 @@ def generate_tweet(data: dict) -> str:
 def post_to_buffer(tweet_text: str) -> bool:
     """Post tweet to Buffer via GraphQL API."""
 
-    now_uk = datetime.now(timezone(timedelta(hours=1)))
-    scheduled = now_uk.replace(hour=9, minute=0, second=0, microsecond=0)
-    if scheduled <= now_uk:
-        scheduled += timedelta(days=1)
-
-    due_at = scheduled.isoformat()
+    # Schedule for tomorrow at 9am UTC
+    now_utc = datetime.now(timezone.utc)
+    scheduled = (now_utc + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    # Format as ISO 8601 with Z suffix - what Buffer expects
+    due_at = scheduled.strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"Scheduling for: {due_at}")
 
     query = """
     mutation CreatePost($input: CreatePostInput!) {
@@ -583,6 +583,10 @@ def post_to_buffer(tweet_text: str) -> bool:
 
     if "errors" not in result and result.get("data", {}).get("createPost") is not None:
         typename = result["data"]["createPost"].get("__typename", "unknown")
+        if "Error" in typename or "error" in typename.lower():
+            print(f"Buffer returned error type: {typename}")
+            print(f"Full response: {result}")
+            return False
         print(f"Posted successfully. Buffer response type: {typename}")
         return True
 
