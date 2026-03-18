@@ -548,14 +548,7 @@ def post_to_buffer(tweet_text: str) -> bool:
     query = """
     mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
-        ... on PostActionSuccess {
-          post {
-            id
-            text
-            dueAt
-            status
-          }
-        }
+        __typename
       }
     }
     """
@@ -588,16 +581,12 @@ def post_to_buffer(tweet_text: str) -> bool:
         print(f"Buffer GraphQL errors: {result['errors']}")
         return False
 
-    create_post = result.get("data", {}).get("createPost", {})
-    post_data = create_post.get("post", create_post)
-    if post_data and post_data.get("id"):
-        print(f"Posted successfully. Buffer post ID: {post_data['id']}")
-        print(f"Scheduled for: {post_data.get('dueAt')}")
+    if "errors" not in result and result.get("data", {}).get("createPost") is not None:
+        typename = result["data"]["createPost"].get("__typename", "unknown")
+        print(f"Posted successfully. Buffer response type: {typename}")
         return True
-    elif create_post.get("message"):
-        print(f"Buffer error: {create_post['message']}")
-        return False
 
+    print(f"Buffer did not confirm success: {result}")
     return False
 
 
