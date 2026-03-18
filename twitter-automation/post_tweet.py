@@ -548,15 +548,16 @@ def post_to_buffer(tweet_text: str) -> bool:
     query = """
     mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
-        ... on Post {
-          id
-          text
-          dueAt
-          status
+        ... on PostActionPayload {
+          post {
+            id
+            text
+            dueAt
+            status
+          }
         }
-        ... on CoreApiError {
+        ... on Error {
           message
-          type
         }
       }
     }
@@ -590,13 +591,14 @@ def post_to_buffer(tweet_text: str) -> bool:
         print(f"Buffer GraphQL errors: {result['errors']}")
         return False
 
-    post_data = result.get("data", {}).get("createPost", {})
-    if post_data.get("id"):
+    create_post = result.get("data", {}).get("createPost", {})
+    post_data = create_post.get("post", create_post)
+    if post_data and post_data.get("id"):
         print(f"Posted successfully. Buffer post ID: {post_data['id']}")
         print(f"Scheduled for: {post_data.get('dueAt')}")
         return True
-    elif post_data.get("message"):
-        print(f"Buffer error: {post_data['message']}")
+    elif create_post.get("message"):
+        print(f"Buffer error: {create_post['message']}")
         return False
 
     return False
