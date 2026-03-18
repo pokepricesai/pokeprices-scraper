@@ -548,16 +548,13 @@ def post_to_buffer(tweet_text: str) -> bool:
     query = """
     mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
-        ... on PostActionPayload {
+        ... on PostActionSuccess {
           post {
             id
             text
             dueAt
             status
           }
-        }
-        ... on Error {
-          message
         }
       }
     }
