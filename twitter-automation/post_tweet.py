@@ -38,7 +38,6 @@ CATEGORIES = {
 # ── DATA FETCHERS ─────────────────────────────────────────────────────────────
 
 def get_top_mover():
-    """Get the best genuine mover - filters out sealed product and thin volume."""
     try:
         result = supabase.rpc("get_top_risers_filtered", {
             "time_period": "7d",
@@ -66,16 +65,15 @@ def get_top_mover():
         if not filtered:
             return None
 
-        # Vary which card we pick - not always the top one
         day_of_year = datetime.now().timetuple().tm_yday
         pick = filtered[day_of_year % min(3, len(filtered))]
 
         raw_usd = pick.get("current_raw", 0) / 100
         raw_gbp = raw_usd / 1.27
         pct = pick["pct_change"]
-
         set_name = pick.get("set_name", "")
-        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else f"{BASE_URL}/browse"
+        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else None
+
         return {
             "type": "top_mover",
             "card_name": pick["card_name"],
@@ -92,13 +90,11 @@ def get_top_mover():
 
 
 def get_psa_pop_insight():
-    """Find a card with interesting PSA population stats - varies the angle."""
     try:
         day_of_year = datetime.now().timetuple().tm_yday
-        angle = day_of_year % 3  # rotate between 3 different angles
+        angle = day_of_year % 3
 
         if angle == 0:
-            # Very low gem rate - rarity angle
             result = supabase.from_("psa_population") \
                 .select("card_name, set_name, psa_10, total_graded, gem_rate, card_number") \
                 .gt("total_graded", 500) \
@@ -109,7 +105,6 @@ def get_psa_pop_insight():
                 .execute()
             angle_label = "low_gem_rate"
         elif angle == 1:
-            # High total graded - most popular grading targets
             result = supabase.from_("psa_population") \
                 .select("card_name, set_name, psa_10, total_graded, gem_rate, card_number") \
                 .gt("total_graded", 5000) \
@@ -118,7 +113,6 @@ def get_psa_pop_insight():
                 .execute()
             angle_label = "most_graded"
         else:
-            # High gem rate - modern easy grades
             result = supabase.from_("psa_population") \
                 .select("card_name, set_name, psa_10, total_graded, gem_rate, card_number") \
                 .gt("total_graded", 1000) \
@@ -133,9 +127,9 @@ def get_psa_pop_insight():
             return None
 
         card = random.choice(rows[:10])
-
         set_name = card.get("set_name", "").replace("Pokemon ", "")
-        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else f"{BASE_URL}/browse"
+        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else None
+
         return {
             "type": "psa_pop_insight",
             "angle": angle_label,
@@ -152,7 +146,6 @@ def get_psa_pop_insight():
 
 
 def get_set_release():
-    """Get upcoming or very recent set release."""
     try:
         today = datetime.now(timezone.utc).date().isoformat()
         future = (datetime.now(timezone.utc) + timedelta(days=60)).date().isoformat()
@@ -184,9 +177,9 @@ def get_set_release():
         next_release = releases[0]
         release_date = datetime.fromisoformat(next_release["release_date"])
         days_away = (release_date.date() - datetime.now(timezone.utc).date()).days
-
         set_name = next_release["set_name"]
         set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}"
+
         return {
             "type": "set_release",
             "set_name": set_name,
@@ -202,7 +195,6 @@ def get_set_release():
 
 
 def get_underpriced_deal():
-    """Get a genuine underpriced deal from daily_deals table."""
     try:
         result = supabase.from_("daily_deals") \
             .select("*") \
@@ -227,14 +219,13 @@ def get_underpriced_deal():
         if not filtered:
             return None
 
-        # Rotate through top deals for variety
         day_of_year = datetime.now().timetuple().tm_yday
         deal = filtered[day_of_year % min(5, len(filtered))]
 
         listing_price = deal.get("listing_price_cents", 0) / 100
         fair_value = deal.get("fair_value_cents", 0) / 100
         listing_gbp = listing_price / 1.27
-        url = deal.get("item_web_url") or deal.get("listing_url") or f"{BASE_URL}/browse"
+        url = deal.get("item_web_url") or deal.get("listing_url") or None
 
         return {
             "type": "underpriced_deal",
@@ -252,7 +243,6 @@ def get_underpriced_deal():
 
 
 def get_grading_tip():
-    """Returns a rotating grading tip - varied angles, human tone."""
     tips = [
         {
             "tip": "centering",
@@ -261,55 +251,55 @@ def get_grading_tip():
         {
             "tip": "whitening",
             "fact": "Minor corner whitening on the back is the most common reason cards get PSA 9 instead of 10. It does not prevent a 9. Factory whitening from packs grades 9 all the time.",
-        }},
+        },
         {
             "tip": "graders_uk",
             "fact": "UK grading costs via consolidator: PSA around 17.50 pounds (45+ days), CGC around 10 pounds (15 days), ACE around 12 pounds (days not months). PSA carries the biggest resale premium on vintage.",
-        }},
+        },
         {
             "tip": "gem_rates",
             "fact": "Gem rates by era: vintage 1999-2003 is 1-5%, mid era 2004-2016 is 5-15%, modern 2017+ is 30-60%. Lower gem rate means scarcer PSA 10s and higher premiums when they do exist.",
-        }},
+        },
         {
             "tip": "psa_vs_cgc",
             "fact": "CGC is cheaper and faster than PSA but PSA 10s command a bigger resale premium on vintage. For modern the gap is smaller. Match your grader to your exit strategy.",
-        }},
+        },
         {
             "tip": "grade_value",
             "fact": "If the PSA 10 is more than 3x the PSA 9 price, the 9 is usually better value. If PSA 9 is under 2x raw, just buy raw. Grading only makes sense when the premium justifies the cost and wait.",
-        }},
+        },
         {
             "tip": "fake_detection",
             "fact": "Quick fake card check: hold to light and look for the black inner layer. Real cards have it, fakes usually do not. Also check font consistency, holo pattern, and card stock thickness.",
-        }},
+        },
         {
             "tip": "what_to_grade",
             "fact": "Not everything is worth grading. Rule of thumb: the PSA 10 sale price needs to exceed raw price plus grading cost plus your time. For most modern bulk, it does not.",
-        }},
+        },
         {
             "tip": "surface_scratches",
             "fact": "Holo scratches are one of the hardest things to see under normal light. Check your holos at an angle under a bright lamp before submitting. What looks mint flat often has scratches when angled.",
-        }},
+        },
         {
             "tip": "pack_fresh",
             "fact": "Pack fresh does not mean PSA 10. Base Set cards came out of packs with print lines, whitening, and centering issues. Vintage gem rates are low for a reason.",
-        }},
+        },
         {
             "tip": "ace_grader",
             "fact": "ACE Grading is the fastest option in the UK right now - turnaround in days not months, around 12 pounds via consolidator. Growing resale acceptance but PSA still dominates the premium end.",
-        }},
+        },
         {
             "tip": "buy_or_grade",
             "fact": "Buying a PSA 9 is often smarter than grading raw. You skip the risk of getting an 8, the wait, and the cost. Only grade yourself if you have high confidence in the card condition.",
-        }},
+        },
         {
             "tip": "shadowless",
             "fact": "Shadowless Base Set cards have no drop shadow on the right side of the artwork box. They are rarer than unlimited but not 1st Edition. The stamp is what makes a 1st Ed - shadowless without it is still unlimited print run.",
-        }},
+        },
         {
             "tip": "japanese_grading",
             "fact": "Japanese cards have better print quality and gem at higher rates than English equivalents. If you are grading for a collection rather than UK resale, Japanese PSA 10s are easier and cheaper to achieve.",
-        }},
+        },
     ]
 
     day_of_year = datetime.now().timetuple().tm_yday
@@ -318,7 +308,6 @@ def get_grading_tip():
 
 
 def get_market_trend():
-    """Get overall market trend data."""
     try:
         result = supabase.from_("market_index") \
             .select("*") \
@@ -331,7 +320,6 @@ def get_market_trend():
             return None
 
         latest = rows[0]
-
         pct_7d = latest.get("raw_pct_7d")
         pct_30d = latest.get("raw_pct_30d")
         cards_tracked = latest.get("total_cards_tracked", 0)
@@ -340,13 +328,11 @@ def get_market_trend():
         if pct_7d is None:
             return None
 
-        direction = "up" if pct_7d > 0 else "down"
-
         return {
             "type": "market_trend",
             "pct_7d": round(pct_7d, 1),
             "pct_30d": round(pct_30d, 1) if pct_30d else None,
-            "direction": direction,
+            "direction": "up" if pct_7d > 0 else "down",
             "cards_tracked": cards_tracked,
             "median_raw_usd": round(median_raw, 2),
         }
@@ -356,13 +342,11 @@ def get_market_trend():
 
 
 def get_data_fact():
-    """Interesting data fact - rotates between different angles."""
     try:
         day_of_year = datetime.now().timetuple().tm_yday
         angle = day_of_year % 3
 
         if angle == 0:
-            # Most graded cards
             result = supabase.from_("psa_population") \
                 .select("card_name, set_name, total_graded, psa_10, gem_rate") \
                 .order("total_graded", desc=True) \
@@ -370,7 +354,6 @@ def get_data_fact():
                 .execute()
             fact_type = "most_graded"
         elif angle == 1:
-            # Cards with most PSA 10s
             result = supabase.from_("psa_population") \
                 .select("card_name, set_name, total_graded, psa_10, gem_rate") \
                 .gt("psa_10", 100) \
@@ -379,7 +362,6 @@ def get_data_fact():
                 .execute()
             fact_type = "most_tens"
         else:
-            # Cards with fewest PSA 10s despite high submission volume
             result = supabase.from_("psa_population") \
                 .select("card_name, set_name, total_graded, psa_10, gem_rate") \
                 .gt("total_graded", 1000) \
@@ -394,9 +376,9 @@ def get_data_fact():
             return None
 
         card = rows[day_of_year % len(rows)]
-
         set_name = card.get("set_name", "").replace("Pokemon ", "")
-        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else f"{BASE_URL}/browse"
+        set_url = f"{BASE_URL}/set/{requests.utils.quote(set_name)}" if set_name else None
+
         return {
             "type": "data_fact",
             "fact_type": fact_type,
@@ -415,7 +397,6 @@ def get_data_fact():
 # ── DATA DISPATCHER ───────────────────────────────────────────────────────────
 
 def get_data_for_today():
-    """Get the right data based on day of week. Falls back if no data."""
     day = datetime.now(timezone.utc).weekday()
     category = CATEGORIES[day]
 
@@ -457,14 +438,13 @@ TONE AND STYLE:
 
 HARD RULES:
 - Max 250 characters excluding the URL
-- Only include the URL if it contains "/set/" or "/card/" — meaning it links to a specific set or card page on PokePrices. If the URL is just "pokeprices.io/browse" or the base domain, leave it out entirely. Links to generic pages hurt reach on X — only link when it adds real value for the reader
-- No hashtags at all — they look spammy
+- Only include the URL if it contains "/set/" or "/card/" in the path. If the url field is null or just the base domain, leave it out entirely. Links to generic pages hurt reach on X.
+- No hashtags at all
 - No emojis unless one genuinely adds meaning (max 1 if used)
 - No exclamation marks
 - Never start with "Did you know"
 - No promotional language ("check us out", "we built", "our platform")
 - Be specific — exact numbers beat vague claims every time
-- Never repeat the same tweet structure two days in a row
 
 VARIED OPENINGS — mix these up:
 - Start with a number: "Only 47 PSA 10s exist for..."
@@ -473,22 +453,20 @@ VARIED OPENINGS — mix these up:
 - Start with an observation: "The gap between PSA 9 and PSA 10 on Moonbreon is narrowing..."
 - Start with advice: "If you are grading Base Set, check your centering on the back first..."
 
-GOOD tweet examples:
-"Only 81 PSA 10s exist for Base Set Charizard out of 4,200+ graded. That 1.9% gem rate is why they hold value the way they do. pokeprices.io"
-"Umbreon VMAX alt art up 12% this week — now at £1,380 raw. 18 sales in 30 days, so this is real demand not a single spike. pokeprices.io"
-"Minor corner whitening does not kill a PSA 9. It is the most common reason cards get 9 instead of 10. Do not talk yourself out of submitting. pokeprices.io"
-"First Partner Illustration Collection drops in 2 days. Singles will spike then correct — wait 6-8 weeks after release to buy at better prices. pokeprices.io"
-"The overall market is up 8.2% in 7 days across 38,000+ tracked cards. Broad moves like this usually mean institutional buying, not retail hype. pokeprices.io"
+GOOD examples:
+"Only 81 PSA 10s exist for Base Set Charizard out of 4,200+ graded. That 1.9% gem rate is why they hold value the way they do."
+"Umbreon VMAX alt art up 12% this week — now at £1,380 raw. 18 sales in 30 days, real demand not a single spike. pokeprices.io/set/Evolving%20Skies"
+"Minor corner whitening does not kill a PSA 9. It is the most common reason cards get 9 instead of 10. Do not talk yourself out of submitting."
+"First Partner Illustration Collection drops in 2 days. Singles will spike then correct — wait 6-8 weeks to buy at better prices. pokeprices.io/set/First%20Partner%20Illustration%20Collection"
 
-BAD tweet examples:
-"Check out our amazing price tracker! Great deals available now!"
-"Did you know Charizard is one of the most valuable cards? #Pokemon #TCG"
-"We have data on 40000 cards. Visit our website to learn more!"
+BAD examples:
+"Check out our amazing price tracker!"
+"Did you know Charizard is valuable? #Pokemon #TCG"
+"We have data on 40000 cards. Visit our website!"
 """
 
 
 def generate_tweet(data: dict) -> str:
-    """Call Claude to generate a tweet from the data."""
     data_str = json.dumps(data, indent=2)
 
     response = requests.post(
@@ -505,7 +483,7 @@ def generate_tweet(data: dict) -> str:
             "messages": [
                 {
                     "role": "user",
-                    "content": f"Write a tweet using this data. Make it feel human and vary the structure from yesterday. Data:\n\n{data_str}"
+                    "content": f"Write a tweet using this data. Vary the structure. Data:\n\n{data_str}"
                 }
             ],
         },
@@ -515,7 +493,7 @@ def generate_tweet(data: dict) -> str:
     result = response.json()
 
     if "content" not in result:
-        print(f"Claude API error response: {result}")
+        print(f"Claude API error: {result}")
         raise Exception(f"Claude API failed: {result.get('error', result)}")
 
     tweet = result["content"][0]["text"].strip()
@@ -529,15 +507,6 @@ def generate_tweet(data: dict) -> str:
 # ── BUFFER POSTER ─────────────────────────────────────────────────────────────
 
 def post_to_buffer(tweet_text: str) -> bool:
-    """Post tweet to Buffer via GraphQL API."""
-
-    # Schedule for tomorrow at 9am UTC
-    now_utc = datetime.now(timezone.utc)
-    scheduled = (now_utc + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
-    # Format as ISO 8601 with Z suffix - what Buffer expects
-    due_at = scheduled.strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(f"Scheduling for: {due_at}")
-
     query = """
     mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
@@ -569,24 +538,19 @@ def post_to_buffer(tweet_text: str) -> bool:
     print(f"Buffer response: {json.dumps(result, indent=2)}")
 
     if "errors" in result:
-        print(f"Buffer GraphQL errors: {result['errors']}")
+        print(f"Buffer errors: {result['errors']}")
         return False
 
-    if "errors" not in result and result.get("data", {}).get("createPost") is not None:
-        typename = result["data"]["createPost"].get("__typename", "unknown")
-        if "Error" in typename or "error" in typename.lower():
-            print(f"Buffer returned error type: {typename}")
-            print(f"Full response: {result}")
-            return False
-        print(f"Posted successfully. Buffer response type: {typename}")
-        return True
+    typename = result.get("data", {}).get("createPost", {}).get("__typename", "")
+    if "Error" in typename or "error" in typename.lower():
+        print(f"Buffer error type: {typename}")
+        return False
 
-    print(f"Buffer did not confirm success: {result}")
-    return False
+    print(f"Posted successfully. Type: {typename}")
+    return True
 
 
 def log_to_supabase(tweet_text: str, data: dict, success: bool):
-    """Log the tweet attempt to Supabase for tracking."""
     try:
         supabase.from_("twitter_posts").insert({
             "tweet_text": tweet_text,
@@ -606,7 +570,7 @@ def main():
 
     data = get_data_for_today()
     if not data:
-        print("ERROR: No data available for any category. Exiting.")
+        print("ERROR: No data available. Exiting.")
         return
 
     print(f"Category: {data['type']}")
@@ -616,13 +580,12 @@ def main():
     print(f"\nGenerated tweet ({len(tweet)} chars):\n{tweet}")
 
     success = post_to_buffer(tweet)
-
     log_to_supabase(tweet, data, success)
 
     if success:
-        print("\nDone. Tweet scheduled in Buffer.")
+        print("\nDone. Tweet posted.")
     else:
-        print("\nFailed to post to Buffer.")
+        print("\nFailed to post.")
         exit(1)
 
 
