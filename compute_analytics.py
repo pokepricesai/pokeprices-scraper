@@ -577,7 +577,7 @@ def compute_set_metrics_daily():
             "cards_over_100": len([p for p in prices if p >= 10000]),
             "set_total_value": total_value,
             "set_median_value": median,
-            "set_avg_value": total_value // len(prices),
+            "set_avg_value": total_value // set_total_counts.get(set_name, len(prices)),
             "top1_share_pct": top1_share,
             "top5_share_pct": top5_share,
             "top10_share_pct": top10_share,
