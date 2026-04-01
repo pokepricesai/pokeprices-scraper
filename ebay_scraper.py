@@ -402,7 +402,7 @@ def push_listings_batch(listings):
 
 def clear_old_listings():
     from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     try:
         url = f"{SUPABASE_URL}/rest/v1/ebay_listings?scraped_at=lt.{cutoff}"
         resp = requests.delete(url, headers=SUPABASE_HEADERS, timeout=30)
