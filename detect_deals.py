@@ -314,13 +314,14 @@ def push_deals(deals):
     if not deals:
         return 0
 
-    # Clear today's deals
-    today = date.today().isoformat()
-    requests.delete(
-        f"{SUPABASE_URL}/rest/v1/daily_deals?detected_at=eq.{today}",
-        headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
-        timeout=15,
-    )
+    # Clear ALL old deals — keep only today's run
+from datetime import datetime, timezone, timedelta
+cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+requests.delete(
+    f"{SUPABASE_URL}/rest/v1/daily_deals?detected_at=lt.{cutoff}",
+    headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
+    timeout=15,
+)
 
     # Strip internal fields before pushing
     clean_deals = []
