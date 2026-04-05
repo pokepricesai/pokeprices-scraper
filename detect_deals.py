@@ -17,7 +17,7 @@ import requests
 import re
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 
 # ============================================
 # CONFIGURATION
@@ -32,17 +32,14 @@ SUPABASE_HEADERS = {
     "Content-Type": "application/json",
 }
 
-# ——— Deal thresholds ———
-MIN_DISCOUNT_PCT = 15          # At least 15% below fair value
-MIN_FAIR_VALUE_CENTS = 1000    # Card worth at least $10
-MIN_SELLER_FEEDBACK = 50       # Seller has 50+ feedback
-MAX_PRICE_RATIO = 0.85         # Listing ≤ 85% of fair value
-MIN_PRICE_RATIO = 0.30         # Listing ≥ 30% of fair value (below = wrong card)
+# Deal thresholds
+MIN_DISCOUNT_PCT = 15
+MIN_FAIR_VALUE_CENTS = 1000
+MIN_SELLER_FEEDBACK = 50
+MAX_PRICE_RATIO = 0.85
+MIN_PRICE_RATIO = 0.30
 
-# Only trust these match confidence levels
 TRUSTED_CONFIDENCE = ["high", "medium"]
-
-# USD to GBP conversion for comparing UK listings
 USD_TO_GBP = 0.79
 
 
@@ -101,51 +98,31 @@ def convert_to_usd_cents(price_cents, currency):
 
 
 def get_fair_value_for_condition(trend, condition_str):
-    """Get the right fair value based on the listing condition.
-    
-    Rules:
-      - PSA/CGC/BGS 10        → compare against current_psa10
-      - PSA/CGC/BGS 9 or 9.5  → compare against current_psa9
-      - PSA/CGC/BGS 1-8        → compare against current_raw (we don't have lower grade prices,
-                                  and low-grade slabs are often worth LESS than raw, so raw is
-                                  the safest comparison — these should NOT surface as deals)
-      - Ungraded               → compare against current_raw
-      - Unknown                → compare against current_raw
-    """
     condition_str = (condition_str or "").strip()
     condition_lower = condition_str.lower()
-    
-    # Check if it's graded at all — must contain a grading company name
+
     grading_companies = ["psa", "cgc", "bgs", "sgc", "ace", "ags", "tag", "gma", "mnt"]
     is_graded = any(co in condition_lower for co in grading_companies) or condition_lower == "graded"
-    
+
     if not is_graded:
-        # Ungraded — always use raw price
         raw = trend.get("current_raw", 0)
         return raw, "Raw"
-    
-    # Extract grade number from condition string like "PSA 10", "CGC 9.5"
+
     grade_match = re.search(r'(\d+\.?\d*)', condition_str)
     grade_num = float(grade_match.group(1)) if grade_match else None
-    
+
     if grade_num is not None:
         if grade_num >= 10:
             psa10 = trend.get("current_psa10")
             if psa10 and psa10 > 0:
-                return psa10, f"PSA 10"
-        
+                return psa10, "PSA 10"
         if grade_num >= 9:
             psa9 = trend.get("current_psa9")
             if psa9 and psa9 > 0:
-                return psa9, f"PSA 9"
-        
-        # Grade 1-8: we don't have price data for these grades.
-        # Low-grade slabs (PSA 1-5) are often worth LESS than raw near-mint.
-        # Using raw as the comparison means these won't falsely appear as deals.
+                return psa9, "PSA 9"
         raw = trend.get("current_raw", 0)
         return raw, f"Raw (no data for grade {grade_num})"
-    
-    # Graded but no grade number — use raw as conservative fallback
+
     raw = trend.get("current_raw", 0)
     return raw, "Raw (grade unknown)"
 
@@ -165,19 +142,16 @@ def detect_deals(listings, trend_map):
     for listing in listings:
         card_slug = listing["card_slug"]
 
-        # Must have trend data
         trend = trend_map.get(card_slug)
         if not trend:
             stats["no_trend"] += 1
             continue
 
-        # Only trust high/medium confidence matches
         confidence = listing.get("match_confidence", "none")
         if confidence not in TRUSTED_CONFIDENCE:
             stats["low_confidence"] += 1
             continue
 
-      # Skip junk listings that slipped through
         title_lower = (listing.get("title") or "").lower()
         junk_terms = [
             "metal card", "metal pokemon", "gold metal", "gold plated", "gold card",
@@ -191,26 +165,22 @@ def detect_deals(listings, trend_map):
             stats["low_confidence"] += 1
             continue
 
-        # Get the right fair value for this condition
         condition = listing.get("condition", "Ungraded")
         fair_value_cents, value_type = get_fair_value_for_condition(trend, condition)
-        
+
         if not fair_value_cents or fair_value_cents < MIN_FAIR_VALUE_CENTS:
             stats["low_value"] += 1
             continue
 
-        # Skip low-grade slabs (PSA 1-6) — these are damaged cards worth less
-        # than raw, so comparing against raw creates false "deals"
         grade_match = re.search(r'(\d+\.?\d*)', condition or "")
         if grade_match:
             grade_num = float(grade_match.group(1))
-            is_graded = any(co in (condition or "").lower() for co in 
-                          ["psa", "cgc", "bgs", "sgc", "ace", "ags"])
+            is_graded = any(co in (condition or "").lower() for co in
+                            ["psa", "cgc", "bgs", "sgc", "ace", "ags"])
             if is_graded and grade_num < 7:
-                stats["low_value"] += 1  # reuse this counter
+                stats["low_value"] += 1
                 continue
 
-        # Seller check
         feedback = listing.get("seller_feedback_score") or 0
         if feedback < MIN_SELLER_FEEDBACK:
             stats["low_feedback"] += 1
@@ -218,7 +188,6 @@ def detect_deals(listings, trend_map):
 
         stats["checked"] += 1
 
-        # Convert to USD for comparison
         total_cost_cents = listing.get("total_cost_cents", 0)
         currency = listing.get("currency", "USD")
         total_usd = convert_to_usd_cents(total_cost_cents, currency)
@@ -228,12 +197,10 @@ def detect_deals(listings, trend_map):
 
         price_ratio = total_usd / fair_value_cents
 
-        # Sanity: too cheap = wrong card
         if price_ratio < MIN_PRICE_RATIO:
             stats["wrong_card"] += 1
             continue
 
-        # Not cheap enough = not a deal
         if price_ratio > MAX_PRICE_RATIO:
             stats["not_cheap"] += 1
             continue
@@ -261,7 +228,6 @@ def detect_deals(listings, trend_map):
             "item_image_url": listing.get("item_image_url"),
             "condition": condition,
             "detected_at": date.today().isoformat(),
-            # Extra context for display
             "_value_type": value_type,
             "_title": listing.get("title", ""),
         })
@@ -314,14 +280,13 @@ def push_deals(deals):
     if not deals:
         return 0
 
-    # Clear ALL old deals — keep only today's run
-from datetime import datetime, timezone, timedelta
-cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-requests.delete(
-    f"{SUPABASE_URL}/rest/v1/daily_deals?detected_at=lt.{cutoff}",
-    headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
-    timeout=15,
-)
+    # Clear deals older than 1 day
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    requests.delete(
+        f"{SUPABASE_URL}/rest/v1/daily_deals?detected_at=lt.{cutoff}",
+        headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
+        timeout=15,
+    )
 
     # Strip internal fields before pushing
     clean_deals = []
