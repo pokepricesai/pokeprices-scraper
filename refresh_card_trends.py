@@ -1,11 +1,7 @@
 """
 refresh_card_trends.py
-Replaces the inline Python in the GitHub Actions refresh-and-analytics job.
-Key fix: uses per-card nearest-date window lookback instead of a single
-global anchor date — prevents NULL pct for cards missing on one specific day.
-
-Deploy: add this file to repo root, update the YAML step to run:
-  python refresh_card_trends.py
+Key fix: much wider date windows for long-period lookbacks,
+since historical data is monthly snapshots not daily.
 """
 
 import os
@@ -28,8 +24,8 @@ today_str = today.isoformat()
 def find_nearest_date(target_days_ago, window=5):
     """
     Find the most recent date in daily_prices within a window around
-    target_days_ago. Looks back up to window days either side.
-    Returns date string or None.
+    target_days_ago. For long periods, uses a much wider window since
+    historical data is stored as monthly snapshots.
     """
     target = (today - timedelta(days=target_days_ago)).isoformat()
     low    = (today - timedelta(days=target_days_ago + window)).isoformat()
@@ -43,7 +39,8 @@ def find_nearest_date(target_days_ago, window=5):
         data = r.json()
         if isinstance(data, list) and data:
             return data[0]["date"]
-    # Fall back: just find nearest before target with no lower bound
+
+    # Wider fallback: find nearest date before target with no lower bound
     r2 = requests.get(
         f"{SUPABASE_URL}/rest/v1/daily_prices"
         f"?select=date&date=lte.{target}&order=date.desc&limit=1",
@@ -85,6 +82,12 @@ def pct(current, old):
 
 
 # ── Find reference dates ──────────────────────────────────────────────
+# Key: wider windows for longer periods since data is monthly for old cards
+# 90d  → ±20 day window  (data could be monthly, so up to ~30 days off)
+# 180d → ±30 day window
+# 365d → ±45 day window  (monthly snapshots mean up to 31 days off either side)
+# 2y   → ±60 day window
+# 5y   → ±90 day window
 
 d_today = find_nearest_date(0, window=1)
 if not d_today:
@@ -93,15 +96,13 @@ if not d_today:
     print("ERROR: No recent price data found!")
     exit(1)
 
-# Find global anchor dates for the batch fetches
-# Use a wider window (5 days) to find the best available date
 d7   = find_nearest_date(7,    window=5)
-d30  = find_nearest_date(30,   window=5)
-d90  = find_nearest_date(90,   window=5)
-d180 = find_nearest_date(180,  window=7)
-d365 = find_nearest_date(365,  window=14)
-d2y  = find_nearest_date(730,  window=14)
-d5y  = find_nearest_date(1825, window=30)
+d30  = find_nearest_date(30,   window=10)
+d90  = find_nearest_date(90,   window=20)   # was 5 — KEY FIX
+d180 = find_nearest_date(180,  window=30)   # was 7  — KEY FIX
+d365 = find_nearest_date(365,  window=45)   # was 14 — KEY FIX
+d2y  = find_nearest_date(730,  window=60)   # was 14 — KEY FIX
+d5y  = find_nearest_date(1825, window=90)   # was 30 — KEY FIX
 
 print(f"Reference dates:")
 print(f"  today={d_today} 7d={d7} 30d={d30} 90d={d90}")
@@ -120,7 +121,6 @@ if not today_prices:
     exit(1)
 
 # ── Fetch historical prices for each anchor date ──────────────────────
-# Build per-slug lookup dicts for each period
 
 def get_prices_for_date(ref_date):
     if not ref_date:
@@ -139,54 +139,54 @@ for label, ref_date in [
 ]:
     print(f"  Fetching {label} ({ref_date})...")
     hist[label] = get_prices_for_date(ref_date)
+    print(f"    → {len(hist[label])} prices")
 
-# ── Build per-card fallback lookup for 30d window ────────────────────
-# This is the key fix: for 30d, also fetch dates within a ±5 day window
-# so cards missing on the exact anchor date still get a value
+# ── Per-card fallback for sparse cards ───────────────────────────────
+# For cards with monthly-only history, the global anchor date might have
+# no entry for that specific card even with a wide window.
+# Solution: for each period, if slug is missing, find nearest date
+# specifically for that slug using a wider per-card window.
 
-print("Building 30d fallback window...")
-fallback_30d_dates = []
-for offset_days in range(25, 40):  # 25 to 39 days ago
-    d = (today - timedelta(days=offset_days)).isoformat()
-    if d != d30:  # don't re-fetch the main anchor
-        fallback_30d_dates.append(d)
-
-# Fetch available dates in the window that actually exist in daily_prices
-r = requests.get(
-    f"{SUPABASE_URL}/rest/v1/daily_prices"
-    f"?select=date&date=gte.{(today - timedelta(days=39)).isoformat()}"
-    f"&date=lte.{(today - timedelta(days=25)).isoformat()}"
-    f"&order=date.desc",
-    headers=HEADERS, timeout=15,
-)
-available_30d_dates = list({row["date"] for row in r.json()}) if r.status_code == 200 else []
-available_30d_dates = [d for d in available_30d_dates if d != d30]
-print(f"  Found {len(available_30d_dates)} fallback dates in 30d window")
-
-# Fetch prices for fallback dates (only ones not already fetched)
-fallback_30d = {}  # slug -> raw_usd from nearest available date
-for fb_date in sorted(available_30d_dates, reverse=True):  # most recent first
-    rows = fetch_all(
-        f"daily_prices?date=eq.{fb_date}&select=card_slug,raw_usd,psa10_usd"
+def get_price_for_slug_near_date(slug, target_days_ago, window_days):
+    """Find nearest price for a specific slug within window_days of target."""
+    target = (today - timedelta(days=target_days_ago)).isoformat()
+    low    = (today - timedelta(days=target_days_ago + window_days)).isoformat()
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/daily_prices"
+        f"?card_slug=eq.{slug}&raw_usd=gt.0"
+        f"&date=lte.{target}&date=gte.{low}"
+        f"&select=raw_usd,psa10_usd&order=date.desc&limit=1",
+        headers=HEADERS, timeout=10,
     )
-    for row in rows:
-        slug = row["card_slug"]
-        if slug not in fallback_30d:  # only fill if not already found
-            fallback_30d[slug] = row
+    if r.status_code == 200:
+        data = r.json()
+        if data:
+            return data[0]
+    return None
 
-print(f"  Fallback 30d covers {len(fallback_30d)} additional slugs")
-
-# ── Fetch card metadata ───────────────────────────────────────────────
+# ── Build trend rows ──────────────────────────────────────────────────
 
 print("Fetching card metadata...")
 cards_meta = {}
 for row in fetch_all("cards?select=card_slug,card_name,set_name"):
     cards_meta[f"pc-{row['card_slug']}"] = row
 
-# ── Build trend rows ──────────────────────────────────────────────────
+# Per-period config: (hist_key, days_ago, fallback_window)
+# Fallback window is per-card lookup if global anchor misses the slug
+PERIOD_CONFIG = [
+    ("d7",   7,    10),
+    ("d30",  30,   20),
+    ("d90",  90,   40),   # wide fallback for sparse cards
+    ("d180", 180,  60),
+    ("d365", 365,  90),
+    ("d2y",  730,  120),
+    ("d5y",  1825, 180),
+]
 
 trend_rows = []
-null_30d_count = 0
+null_counts = {k: 0 for k, _, _ in PERIOD_CONFIG}
+
+print(f"Building {len(today_prices)} trend rows...")
 
 for row in today_prices:
     slug = row["card_slug"]
@@ -194,55 +194,64 @@ for row in today_prices:
     if not meta:
         continue
 
-    def h(period, field="raw_usd"):
-        entry = hist.get(period, {}).get(slug)
-        if entry is None:
-            return None
-        return entry.get(field)
+    def h(period_key):
+        return hist.get(period_key, {}).get(slug, {}).get("raw_usd")
 
-    # 30d lookback: try main anchor first, then fallback window
-    raw_30d_ago = h("d30")
-    if raw_30d_ago is None:
-        fb = fallback_30d.get(slug)
-        if fb:
-            raw_30d_ago = fb.get("raw_usd")
+    def h10(period_key):
+        return hist.get(period_key, {}).get(slug, {}).get("psa10_usd")
 
-    psa10_30d_ago = hist.get("d30", {}).get(slug, {}).get("psa10_usd") if hist.get("d30", {}).get(slug) else None
+    # For each period, use global anchor first, then per-card fallback
+    period_raws = {}
+    period_psa10s = {}
+    for key, days, fallback_win in PERIOD_CONFIG:
+        val = h(key)
+        p10 = h10(key)
+        if val is None:
+            # Per-card fallback with wider window
+            fb = get_price_for_slug_near_date(slug, days, fallback_win)
+            if fb:
+                val = fb.get("raw_usd")
+                p10 = fb.get("psa10_usd")
+        period_raws[key]   = val
+        period_psa10s[key] = p10
+        if val is None:
+            null_counts[key] += 1
 
-    raw_pct_30d = pct(row.get("raw_usd"), raw_30d_ago)
-    if raw_pct_30d is None:
-        null_30d_count += 1
+    current_raw   = row.get("raw_usd")
+    current_psa10 = row.get("psa10_usd")
 
     trend_rows.append({
         "card_slug":      meta["card_slug"],
         "card_name":      meta.get("card_name"),
         "set_name":       meta.get("set_name"),
-        "current_raw":    row.get("raw_usd"),
-        "current_psa10":  row.get("psa10_usd"),
+        "current_raw":    current_raw,
+        "current_psa10":  current_psa10,
         "current_psa9":   row.get("psa9_usd"),
-        "raw_7d_ago":     h("d7"),
-        "raw_30d_ago":    raw_30d_ago,
-        "raw_90d_ago":    h("d90"),
-        "raw_180d_ago":   h("d180"),
-        "raw_365d_ago":   h("d365"),
-        "raw_2y_ago":     h("d2y"),
-        "raw_5y_ago":     h("d5y"),
-        "psa10_30d_ago":  psa10_30d_ago,
-        "psa10_90d_ago":  hist.get("d90", {}).get(slug, {}).get("psa10_usd") if hist.get("d90", {}).get(slug) else None,
-        "raw_pct_7d":     pct(row.get("raw_usd"), h("d7")),
-        "raw_pct_30d":    raw_pct_30d,
-        "raw_pct_90d":    pct(row.get("raw_usd"), h("d90")),
-        "raw_pct_180d":   pct(row.get("raw_usd"), h("d180")),
-        "raw_pct_365d":   pct(row.get("raw_usd"), h("d365")),
-        "raw_pct_2y":     pct(row.get("raw_usd"), h("d2y")),
-        "raw_pct_5y":     pct(row.get("raw_usd"), h("d5y")),
-        "psa10_pct_30d":  pct(row.get("psa10_usd"), psa10_30d_ago),
-        "psa10_pct_90d":  pct(row.get("psa10_usd"), hist.get("d90", {}).get(slug, {}).get("psa10_usd") if hist.get("d90", {}).get(slug) else None),
+        "raw_7d_ago":     period_raws["d7"],
+        "raw_30d_ago":    period_raws["d30"],
+        "raw_90d_ago":    period_raws["d90"],
+        "raw_180d_ago":   period_raws["d180"],
+        "raw_365d_ago":   period_raws["d365"],
+        "raw_2y_ago":     period_raws["d2y"],
+        "raw_5y_ago":     period_raws["d5y"],
+        "psa10_30d_ago":  period_psa10s["d30"],
+        "psa10_90d_ago":  period_psa10s["d90"],
+        "raw_pct_7d":     pct(current_raw, period_raws["d7"]),
+        "raw_pct_30d":    pct(current_raw, period_raws["d30"]),
+        "raw_pct_90d":    pct(current_raw, period_raws["d90"]),
+        "raw_pct_180d":   pct(current_raw, period_raws["d180"]),
+        "raw_pct_365d":   pct(current_raw, period_raws["d365"]),
+        "raw_pct_2y":     pct(current_raw, period_raws["d2y"]),
+        "raw_pct_5y":     pct(current_raw, period_raws["d5y"]),
+        "psa10_pct_30d":  pct(current_psa10, period_psa10s["d30"]),
+        "psa10_pct_90d":  pct(current_psa10, period_psa10s["d90"]),
         "as_of":          d_today,
     })
 
 print(f"Built {len(trend_rows)} trend rows")
-print(f"  Cards with null 30d pct: {null_30d_count} ({null_30d_count/len(trend_rows)*100:.1f}%)")
+for key, _, _ in PERIOD_CONFIG:
+    pct_null = null_counts[key] / len(trend_rows) * 100 if trend_rows else 0
+    print(f"  {key}: {null_counts[key]} nulls ({pct_null:.1f}%)")
 
 # ── Push to Supabase ──────────────────────────────────────────────────
 
