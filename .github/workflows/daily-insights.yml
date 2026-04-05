@@ -2,7 +2,7 @@ name: Daily Insights Generator
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # 6am UTC every day
+    - cron: '0 9 * * *'   # 6am UTC every day
   workflow_dispatch:        # manual trigger from GitHub UI
 
 jobs:
