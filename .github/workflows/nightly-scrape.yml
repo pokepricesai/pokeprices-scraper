@@ -112,7 +112,7 @@ jobs:
   refresh-and-analytics:
     runs-on: ubuntu-latest
     needs: [batch1, batch2, batch3, batch4, batch5, batch6]
-    timeout-minutes: 180
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -129,6 +129,8 @@ jobs:
         run: python scrape_set_prices.py
 
       - name: Compute analytics (metrics, spread, set metrics)
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 8 * * 0'
+        continue-on-error: true
         run: python compute_analytics.py
 
       - name: Refresh Pokémon species stats
