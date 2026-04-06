@@ -112,7 +112,7 @@ jobs:
   refresh-and-analytics:
     runs-on: ubuntu-latest
     needs: [batch1, batch2, batch3, batch4, batch5, batch6]
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
