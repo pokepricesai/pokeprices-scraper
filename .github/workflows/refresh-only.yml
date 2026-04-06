@@ -1,0 +1,41 @@
+name: Refresh Trends Only
+
+on:
+  workflow_dispatch:
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+jobs:
+  refresh-and-analytics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Refresh card_trends
+        run: python refresh_card_trends.py
+
+      - name: Scrape set prices
+        continue-on-error: true
+        run: python scrape_set_prices.py
+
+      - name: Refresh Pokémon species stats
+        continue-on-error: true
+        run: python refresh_pokemon_species.py
+
+      - name: Strip Pokemon prefix from set names
+        run: |
+          curl -s -X POST \
+            "$SUPABASE_URL/rest/v1/rpc/strip_pokemon_prefix" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+          echo "Done"
