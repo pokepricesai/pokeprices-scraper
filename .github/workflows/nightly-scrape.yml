@@ -129,6 +129,7 @@ jobs:
         run: python scrape_set_prices.py
 
       - name: Compute analytics (metrics, spread, set metrics)
+        # Only runs on Sundays (weekly) or manual triggers — pulls 3.5M rows, too slow for nightly
         if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 8 * * 0'
         continue-on-error: true
         run: python compute_analytics.py
@@ -185,28 +186,8 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python nightly_analytics.py
 
-  # —— Manual: force refresh card_trends (run anytime via workflow_dispatch) ——
-  force-refresh-trends:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: pip install requests
-      - name: Force refresh card_trends via RPC
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          curl -s -X POST \
-            "$SUPABASE_URL/rest/v1/rpc/refresh_card_trends" \
-            -H "apikey: $SUPABASE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_KEY" \
-            -H "Content-Type: application/json" \
-            --max-time 600 \
-            -d '{}'
-          echo "card_trends refresh triggered"
+  # —— REMOVED: force-refresh-trends ————————————————————————————————
+  # This job was running refresh_card_trends via an old RPC on manual triggers,
+  # conflicting with refresh-and-analytics which runs the Python script.
+  # Both jobs truncated card_trends simultaneously causing data loss.
+  # refresh_card_trends.py in refresh-and-analytics handles this correctly now.
