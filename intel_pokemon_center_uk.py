@@ -18,6 +18,25 @@ class PokemonCenterUKScraper(BaseScraper):
     retailer_slug = "pokemon-center-uk"
     retailer_name = "Pokémon Center UK"
 
+    # PC UK uses Cloudflare — needs convincing browser headers
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Referer": "https://www.google.com/",
+    }
+
     def parse(self, html: str, url: str) -> ScrapeResult:
         result = ScrapeResult(url=url)
         soup = BeautifulSoup(html, "html.parser")
@@ -54,6 +73,13 @@ class PokemonCenterUKScraper(BaseScraper):
 
         result.detected_text = list(set(detected_text))
         detected_joined = " ".join(detected_text + [page_text[:2000]])
+
+        # ── Cloudflare / bot protection detection ─────────────────────────────
+        if any(x in page_text for x in ["pardon our interruption", "checking your browser", "enable javascript and cookies", "cf-browser-verification", "ray id"]):
+            result.stock_state = StockState.UNKNOWN
+            result.parser_confidence = 0.10
+            result.error = "Cloudflare bot protection detected — try again or use Playwright"
+            return result
 
         # ── State logic (order matters — most specific first) ──────────────────
 
