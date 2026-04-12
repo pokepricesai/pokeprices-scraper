@@ -4,7 +4,7 @@ PokePrices Scraper v8
 Based on v7. Changes:
   - Added sales volume extraction from PriceCharting pages
   - Volume text (e.g. "1 sale per day", "2 sales per month") parsed to monthly figure
-  - Monthly sales upserted into card_volume table (sales_30d field)
+  - Fixed card_volume upsert: correct PK (card_slug, grade), bare numeric slug, volume_label + confidence
   - All other behaviour unchanged
 """
 
@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 # CONFIGURATION
 # ============================================
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://egidpsrkqveioidatc.supabase.co")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://egidpsrkqvymvioidatc.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
 
 LOCAL_CSV_FOLDER = r"C:\Users\lukep\OneDrive\Desktop\pokeprices\pc_csvs"
@@ -193,54 +193,42 @@ def extract_historical_prices(html):
 
 def extract_sales_volume(html):
     """
-    Extract sales volume from PriceCharting page.
+    Extract sales volume for all grades from PriceCharting page.
+    HTML pattern: data-show-tab="completed-auctions-used" ... volume:&nbsp;</span> <a>3 sales per week</a>
 
-    PriceCharting shows volume as text in the page like:
-      "1 sale per day", "2 sales per day"
-      "1 sale per week", "3 sales per week"
-      "1 sale per month", "2 sales per month"
-      "1 sale per year", "1 sale per 2 years"
-
-    Returns approximate monthly sales as an integer, or None.
+    Returns dict of {grade: (monthly_int, volume_text)} or empty dict.
     """
-    volume_patterns = [
-        r'id=["\']used_price["\'].*?volume["\']?\s*[^>]*>([^<]+sale[^<]+)',
-        r'class=["\']volume["\'][^>]*>\s*([^<]*\d+\s+sale[^<]*)',
-        r'<span[^>]*>\s*(\d+\s+sales?\s+per\s+(?:day|week|month|year)[^<]*)\s*</span>',
-        r'volume["\']?\s*[^>]*>\s*([^<]*\d+[^<]*sale[^<]*)',
-    ]
+    # Map data-show-tab values to our grade names
+    TAB_TO_GRADE = {
+        'completed-auctions-used':        'Ungraded',
+        'completed-auctions-graded':      'PSA 9',
+        'completed-auctions-manual-only': 'PSA 10',
+        'completed-auctions-cib':         'PSA 7',
+        'completed-auctions-new':         'PSA 8',
+        'completed-auctions-box-only':    'CGC 9.5',
+    }
 
-    volume_text = None
-    for pattern in volume_patterns:
-        match = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
-        if match:
-            candidate = match.group(1).strip()
-            if re.search(r'\d+\s+sales?\s+per', candidate, re.IGNORECASE):
-                volume_text = candidate
-                break
+    # Match each td with data-show-tab and its volume text
+    pattern = r'data-show-tab=["\']([^"\']+)["\'][^>]*>.*?volume:&nbsp;</span>\s*<a[^>]*>([^<]+)</a>'
+    results = {}
 
-    if not volume_text:
-        return None
+    for m in re.finditer(pattern, html, re.DOTALL | re.IGNORECASE):
+        tab = m.group(1).strip()
+        volume_text = m.group(2).strip()
+        grade = TAB_TO_GRADE.get(tab)
+        if not grade:
+            continue
+        if grade in results:
+            continue  # take first occurrence only
+        monthly = parse_volume_to_monthly(volume_text)
+        if monthly is not None:
+            results[grade] = (monthly, volume_text)
 
-    return parse_volume_to_monthly(volume_text)
+    return results
 
 
 def parse_volume_to_monthly(text):
-    """
-    Convert PriceCharting volume text to approximate monthly sales.
-
-    Examples:
-      "1 sale per day"     → 30
-      "2 sales per day"    → 60
-      "1 sale per week"    → 4.3
-      "3 sales per week"   → 12.9
-      "1 sale per month"   → 1
-      "2 sales per month"  → 2
-      "1 sale per year"    → 0.08
-      "1 sale per 2 years" → 0.04
-
-    Returns rounded integer (minimum 1 if any sales found).
-    """
+    """Convert PriceCharting volume text to approximate monthly sales integer."""
     text = text.lower().strip()
 
     sales_match = re.search(r'(\d+(?:\.\d+)?)\s+sales?', text)
@@ -262,6 +250,38 @@ def parse_volume_to_monthly(text):
         return None
 
     return max(1, round(monthly))
+
+
+def volume_to_label(sales_30d):
+    """Convert monthly sales count to a human-readable label."""
+    if sales_30d >= 60:
+        return "2 sales per day"
+    elif sales_30d >= 30:
+        return "1 sale per day"
+    elif sales_30d >= 17:
+        return "4 sales per week"
+    elif sales_30d >= 12:
+        return "3 sales per week"
+    elif sales_30d >= 8:
+        return "2 sales per week"
+    elif sales_30d >= 4:
+        return "1 sale per week"
+    elif sales_30d >= 3:
+        return "3 sales per month"
+    elif sales_30d >= 2:
+        return "2 sales per month"
+    else:
+        return "1 sale per month"
+
+
+def volume_to_confidence(sales_30d):
+    """Convert monthly sales count to confidence level."""
+    if sales_30d >= 8:
+        return "high"
+    elif sales_30d >= 3:
+        return "medium"
+    else:
+        return "low"
 
 
 # ============================================
@@ -362,10 +382,10 @@ def update_card_image(pc_id, image_url, pc_url):
         return False
 
 
-def upsert_card_volume(card_slug, sales_30d):
+def upsert_card_volume(card_slug, sales_30d, volume_text=None, grade='Ungraded'):
     """
-    Upsert sales_30d into card_volume table.
-    Only updates the sales_30d field — leaves all other volume fields untouched.
+    Upsert sales volume into card_volume table.
+    PK is (card_slug, grade) — bare numeric slug, no pc- prefix.
     """
     headers = {
         "apikey": SUPABASE_KEY,
@@ -375,16 +395,23 @@ def upsert_card_volume(card_slug, sales_30d):
     }
 
     today = datetime.now().strftime("%Y-%m-%d")
+    bare_slug = card_slug.replace("pc-", "")
+
+    # Use raw scraped text as label if available, otherwise derive it
+    label = volume_text if volume_text else volume_to_label(sales_30d)
 
     payload = {
-        "card_slug": card_slug,
+        "card_slug": bare_slug,
+        "grade": grade,
         "sales_30d": sales_30d,
+        "volume_label": label,
+        "confidence": volume_to_confidence(sales_30d),
         "as_of": today,
     }
 
     try:
         resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/card_volume?on_conflict=card_slug",
+            f"{SUPABASE_URL}/rest/v1/card_volume?on_conflict=card_slug,grade",
             json=payload,
             headers=headers,
             timeout=15,
@@ -501,14 +528,17 @@ def main():
                     images_saved += 1
                     print(f"  🖼  Image saved")
 
-        # Volume extraction
+        # Volume extraction — all grades
         if html:
-            sales_monthly = extract_sales_volume(html)
-            if sales_monthly is not None:
-                ok = upsert_card_volume(card_slug, sales_monthly)
+            volume_by_grade = extract_sales_volume(html)
+            for grade, (sales_monthly, volume_text) in volume_by_grade.items():
+                ok = upsert_card_volume(card_slug, sales_monthly, volume_text, grade)
                 if ok:
                     volumes_saved += 1
-                    print(f"  📊 Volume: ~{sales_monthly}/mo")
+            if volume_by_grade:
+                ungraded = volume_by_grade.get('Ungraded')
+                if ungraded:
+                    print(f"  📊 Volume: {ungraded[1]} ({len(volume_by_grade)} grades)")
 
         # Today's price record
         today_record = {
