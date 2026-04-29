@@ -88,17 +88,34 @@ all_cards = fetch_all("cards?select=card_slug,card_name&is_sealed=eq.false")
 print(f"  {len(all_cards)} cards loaded")
 
 # ── Step 4: Load latest prices ────────────────────────────────────────
+# Query just the latest snapshot, not the full history. Pulling every row
+# of daily_prices (3.5M+) with offset pagination was timing out the
+# refresh-and-analytics job at the 60m wall.
 
-print("Loading latest prices...")
-all_prices_raw = fetch_all(
-    "daily_prices?select=card_slug,raw_usd&raw_usd=gt.0&order=date.desc"
+print("Finding latest priced date...")
+r = requests.get(
+    f"{SUPABASE_URL}/rest/v1/daily_prices?select=date&order=date.desc&limit=1",
+    headers=HEADERS, timeout=15,
 )
-# Deduplicate — keep first (most recent) price per slug
+latest_date = None
+if r.status_code == 200:
+    data = r.json()
+    if isinstance(data, list) and data:
+        latest_date = data[0]["date"]
+
+if not latest_date:
+    print("ERROR: No daily_prices data found")
+    raise SystemExit(1)
+
+print(f"  Latest date: {latest_date}")
+print("Loading prices for latest date...")
+latest_rows = fetch_all(
+    f"daily_prices?date=eq.{latest_date}&raw_usd=gt.0&select=card_slug,raw_usd"
+)
 price_map: dict[str, int] = {}
-for row in all_prices_raw:
-    slug = row["card_slug"]
-    if slug not in price_map and row["raw_usd"]:
-        price_map[slug] = row["raw_usd"]
+for row in latest_rows:
+    if row["raw_usd"]:
+        price_map[row["card_slug"]] = row["raw_usd"]
 print(f"  {len(price_map)} cards with prices")
 
 # ── Step 5: Match species to cards ───────────────────────────────────
