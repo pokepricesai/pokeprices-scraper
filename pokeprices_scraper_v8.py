@@ -55,8 +55,34 @@ TD_ID_TO_FIELD = {
 ALL_PRICE_FIELDS = [
     "raw_usd", "psa10_usd", "psa9_usd", "psa8_usd", "psa7_usd",
     "cgc10_usd", "cgc95_usd", "bgs10_usd", "bgs95_usd",
+    "grade1_usd", "grade2_usd", "grade3_usd", "grade4_usd",
+    "grade5_usd", "grade6_usd",
+    "tag10_usd", "ace10_usd", "sgc10_usd",
+    "bgs10black_usd", "cgc10pristine_usd",
     "tcgplayer_usd", "cardmarket_eur"
 ]
+
+FULL_PRICE_LABEL_TO_FIELD = {
+    "Ungraded":         "raw_usd",
+    "Grade 1":          "grade1_usd",
+    "Grade 2":          "grade2_usd",
+    "Grade 3":          "grade3_usd",
+    "Grade 4":          "grade4_usd",
+    "Grade 5":          "grade5_usd",
+    "Grade 6":          "grade6_usd",
+    "Grade 7":          "psa7_usd",
+    "Grade 8":          "psa8_usd",
+    "Grade 9":          "psa9_usd",
+    "Grade 9.5":        "cgc95_usd",
+    "TAG 10":           "tag10_usd",
+    "ACE 10":           "ace10_usd",
+    "SGC 10":           "sgc10_usd",
+    "CGC 10":           "cgc10_usd",
+    "PSA 10":           "psa10_usd",
+    "BGS 10":           "bgs10_usd",
+    "BGS 10 Black":     "bgs10black_usd",
+    "CGC 10 Pristine":  "cgc10pristine_usd",
+}
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -158,9 +184,40 @@ def extract_current_prices(html):
             try:
                 val = float(match.group(1).replace(",", ""))
                 if val > 0:
-                    prices[field] = int(val * 100)
+                    prices[field] = round(val * 100)
             except ValueError:
                 pass
+    return prices
+
+
+def extract_full_price_guide(html):
+    table_match = re.search(
+        r'<div\s+id="full-prices"[^>]*>.*?<table[^>]*>(.*?)</table>',
+        html, re.DOTALL | re.IGNORECASE,
+    )
+    if not table_match:
+        return {}
+
+    prices = {}
+    row_pattern = re.compile(
+        r'<tr>\s*<td>\s*([^<]+?)\s*</td>\s*<td\s+class="price\s+js-price"[^>]*>\s*([^<]+?)\s*</td>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in row_pattern.finditer(table_match.group(1)):
+        label = re.sub(r'\s+', ' ', m.group(1).strip())
+        price_text = m.group(2).strip()
+        field = FULL_PRICE_LABEL_TO_FIELD.get(label)
+        if not field:
+            continue
+        price_match = re.match(r'\$([\d,]+\.?\d*)', price_text)
+        if not price_match:
+            continue
+        try:
+            val = float(price_match.group(1).replace(",", ""))
+            if val > 0:
+                prices[field] = round(val * 100)
+        except ValueError:
+            pass
     return prices
 
 
@@ -508,7 +565,7 @@ def main():
 
         current = None
         if html:
-            current = extract_current_prices(html)
+            current = {**extract_full_price_guide(html), **extract_current_prices(html)} or None
 
         if not current:
             not_found += 1
