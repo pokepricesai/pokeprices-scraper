@@ -179,7 +179,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: pip install supabase
+        run: pip install supabase requests
       - name: Run nightly analytics
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
