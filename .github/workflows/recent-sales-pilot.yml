@@ -1,0 +1,67 @@
+name: Recent-sales Pilot (Allow-list Only)
+
+# Block 4B-S-3A — runs the 58-card recent-sales pilot once per night.
+#
+# Allow-list source:
+#   public.recent_sales_card_allow_list  (provider='pricecharting' AND enabled=TRUE)
+# Today's count: 58 (seeded by Block 4B-W-2A).
+#
+# This workflow is INTENTIONALLY isolated from .github/workflows/nightly-scrape.yml.
+# It does NOT enable full-catalogue ingestion, does NOT bypass the allow-list,
+# and does NOT change daily_prices/card_volume/cards write paths.
+
+on:
+  schedule:
+    # 13:00 UTC daily. The existing nightly-scrape workflow starts at
+    # 08:00 UTC; its 6 parallel batches (300-min timeout each), plus
+    # refresh-and-analytics, detect-deals, and nightly-analytics, typically
+    # complete within 4 hours. 13:00 UTC leaves ~1 hour of headroom before
+    # the pilot runs.
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+# Guarantee no two pilot runs overlap. A late-finishing scheduled run
+# blocks the next scheduled run instead of racing; a manual dispatch
+# queues behind any running scheduled run rather than cancelling it.
+concurrency:
+  group: recent-sales-pilot
+  cancel-in-progress: false
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  # The ingestion module enforces a strict equals-"true" check on this
+  # variable. Any other value (including unset) makes the run a no-op:
+  # no Supabase write, no market_import_runs row, no recent_sales row.
+  # To disable the pilot without deleting this file, change the value
+  # below to "false" and commit.
+  RECENT_SALES_INGESTION_ENABLED: "true"
+
+jobs:
+  pilot:
+    name: Run 58-card recent-sales pilot
+    runs-on: ubuntu-latest
+    # 60 min covers the worst case under the configured retry policy
+    # (every card 429'd four times = ~120s/card × 58 = ~117 min would
+    # blow the budget — by design, so a mass-throttle event surfaces
+    # as a job timeout rather than silently absorbing).
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run 58-card recent-sales pilot
+        run: |
+          python scripts/run_recent_sales_pilot.py \
+            --limit 58 \
+            --delay-seconds 2.0 \
+            --max-retries 4 \
+            --retry-backoff-seconds 12
