@@ -6,6 +6,10 @@ Based on v7. Changes:
   - Volume text (e.g. "1 sale per day", "2 sales per month") parsed to monthly figure
   - Fixed card_volume upsert: correct PK (card_slug, grade), bare numeric slug, volume_label + confidence
   - All other behaviour unchanged
+
+Block 4B-S-2A: optional, allow-list-only recent-sales ingestion behind the
+RECENT_SALES_INGESTION_ENABLED feature flag. When the flag is not the exact
+string "true", this scraper behaves identically to the prior version.
 """
 
 import requests
@@ -16,6 +20,18 @@ import csv
 import os
 import sys
 from datetime import datetime, timezone
+
+# Recent-sales ingestion is gated behind an env-var feature flag inside
+# recent_sales_ingestion.init_for_scraper_run(). When the flag is off the
+# import is the only added cost (~1 ms) and no function call is made into
+# the ingestion module beyond two no-op invocations per scraper run.
+try:
+    import recent_sales_ingestion as _rsi
+except Exception as _rsi_import_err:  # pragma: no cover — defensive import
+    _rsi = None
+    _rsi_import_error = _rsi_import_err
+else:
+    _rsi_import_error = None
 
 # ============================================
 # CONFIGURATION
@@ -552,6 +568,21 @@ def main():
     volumes_saved = 0
     total_records = 0
 
+    # Optional recent-sales ingestion. init_for_scraper_run returns None
+    # whenever the feature flag is not exactly "true" OR when Supabase env
+    # vars / the allow-list cannot be loaded. A None controller means the
+    # main loop's ingestion hook is a no-op and the price-scrape proceeds
+    # exactly as before.
+    recent_sales_ingestion = None
+    if _rsi is not None:
+        try:
+            recent_sales_ingestion = _rsi.init_for_scraper_run()
+        except Exception as e:
+            print(f"WARNING: recent-sales ingestion init failed: {e}")
+            recent_sales_ingestion = None
+    elif _rsi_import_error is not None:
+        print(f"WARNING: recent_sales_ingestion module import failed: {_rsi_import_error}")
+
     for i, card in enumerate(cards):
         product_name = card["product_name"]
         console_name = card["console_name"]
@@ -562,6 +593,22 @@ def main():
         print(f"[{i+1}/{len(cards)}] {product_name} ({console_name})")
 
         html = fetch_card_page(url)
+
+        # Recent-sales ingestion (flag-gated + allow-list-gated).
+        # Runs BEFORE the current-price `not current` gate so a card whose
+        # price block was missing but whose recent-sales section was present
+        # still has its sales captured.
+        if recent_sales_ingestion is not None and html:
+            try:
+                expected = _rsi.parse_expected_card_number(product_name) if _rsi else None
+                recent_sales_ingestion.maybe_ingest(
+                    html=html,
+                    provider_card_id=pc_id,
+                    page_url=url,
+                    expected_card_number=expected,
+                )
+            except Exception as e:
+                print(f"  recent-sales hook error: {e}")
 
         current = None
         if html:
@@ -635,6 +682,12 @@ def main():
             print(f"  ✗ Supabase push failed")
 
         time.sleep(REQUEST_DELAY)
+
+    if recent_sales_ingestion is not None:
+        try:
+            recent_sales_ingestion.finish(status="success")
+        except Exception as e:
+            print(f"WARNING: recent-sales ingestion finish failed: {e}")
 
     print(f"\n{'='*60}")
     print(f"SCRAPING COMPLETE")
