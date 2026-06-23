@@ -1,9 +1,9 @@
 # Recent-sales pilot — nightly allow-list job
 
-**Block 4B-S-3A.** Automates the manual 58-card pilot we ran end-to-end in
-Block 4B-S-2A. This is the *only* automated recent-sales path in the scraper
-repo today; full-catalogue ingestion does not exist and is explicitly out of
-scope.
+**Block 4B-S-4A.** Scales the nightly allow-list pilot (originally Block
+4B-S-3A, 58 cards) to 3,000 cards per run. This is still the *only*
+automated recent-sales path in the scraper repo; full-catalogue ingestion
+does not exist and is explicitly out of scope.
 
 ## What runs
 
@@ -14,16 +14,35 @@ Command:
 
 ```
 python scripts/run_recent_sales_pilot.py \
-  --limit 58 \
-  --delay-seconds 2.0 \
-  --max-retries 4 \
-  --retry-backoff-seconds 12
+  --limit 3000 \
+  --delay-seconds 1.0 \
+  --max-retries 3 \
+  --retry-backoff-seconds 10
 ```
 
 Allow-list source: `public.recent_sales_card_allow_list` filtered to
-`provider='pricecharting' AND enabled=TRUE`. 58 entries today (seeded by
-Block 4B-W-2A). The `--limit 58` flag is belt-and-braces — even without it
-the runner only processes cards present in the allow-list.
+`provider='pricecharting' AND enabled=TRUE`. The allow-list now contains
+**17,949 enabled rows**, covering every PriceCharting card with
+`raw_usd >= $5` (seeded as part of Block 4B-W-2A's expansion). The
+`--limit 3000` flag caps a single nightly job at the first 3,000
+allow-listed cards; the remaining ~15k allow-listed cards are **not**
+processed in one job yet. Even without `--limit`, the runner only
+processes cards present in the allow-list.
+
+### Coverage status
+
+| | count |
+| --- | --- |
+| Allow-list rows (provider=pricecharting, enabled) | 17,949 |
+| Cards processed per nightly run (this workflow) | up to 3,000 |
+| Cards processed per nightly run outside allow-list | 0 |
+
+The full 17,949-card allow-list is **not** processed in a single nightly
+job today. The next step (separate block) is to introduce rotating weekly
+batches — each scheduled run picks a different slice of the allow-list so
+that every allow-listed card refreshes on a fixed cadence. Until that
+lands, only the first 3,000 cards (by allow-list ordering) refresh each
+night.
 
 ## Schedule
 
@@ -34,10 +53,11 @@ finishes (including refresh-and-analytics, detect-deals, and
 nightly-analytics) by ~12:00 UTC. 13:00 UTC leaves ~1 hour of headroom
 before the pilot kicks off — no risk of contention with the main scrape.
 
-The pilot itself usually takes ~2 minutes (58 cards × ~2 s pacing). Worst
-case under the configured retry policy (every card 429'd four times) is
-~117 minutes; the job has a 60-minute `timeout-minutes` so a mass-throttle
-event surfaces as a job failure rather than silently absorbing latency.
+At `--delay-seconds 1.0` the happy path for 3,000 cards is ~50 minutes
+of fetch pacing alone. The job has a 180-minute `timeout-minutes` budget
+to absorb per-card parse/upsert cost plus a moderate rate of retries; a
+mass-throttle event still surfaces as a job timeout rather than silently
+absorbing latency.
 
 ## Required GitHub secrets
 
@@ -85,14 +105,14 @@ locally with `--dry-run`; the workflow itself only runs the WRITE path.
 Successful nightly run (GitHub Actions log):
 
 ```
-allow-list loaded: 58 card_ids (provider=pricecharting, enabled=true)
+allow-list loaded: 17949 card_ids (provider=pricecharting, enabled=true)
 loading PriceCharting card catalogue from /home/runner/work/.../pc_csvs
-allow-list matches in CSVs: 58/58
---limit 58 applied; processing 58 cards
-[1/58] fetching pcid=… …
-[2/58] fetching pcid=… …
+allow-list matches in CSVs: 17949/17949
+--limit 3000 applied; processing 3000 cards
+[1/3000] fetching pcid=… …
+[2/3000] fetching pcid=… …
 …
-pilot done. mode=WRITE allow_listed=58 fetched=58 parsed=58 ok=N quarantined=K
+pilot done. mode=WRITE allow_listed=17949 fetched=3000 parsed=3000 ok=N quarantined=K
    rejected=0 upserted=N errors=0 skipped_no_html=0 skipped_429=0 skipped_http_error=0
 ```
 
@@ -100,7 +120,7 @@ Database side (one row per run):
 
 - `public.market_import_runs`
   - `source='pilot'`, `status='success'`
-  - `pages_processed=58` (or fewer if some cards were skipped)
+  - `pages_processed=3000` (or fewer if some cards were skipped)
   - `duration_ms` populated
   - `notes` JSON carrying `import_type='recent_sales_pilot'`,
     `cards_allowlisted`, `cards_parsed`, `rows_upserted`,
@@ -148,4 +168,6 @@ Two paths, neither requires logging into the scraper:
 - The web repo (Block 4B-W-1 / 4B-W-2A) owns: the migration, the
   allow-list seed, the admin inspection view.
 - Future blocks own: per-card review queue actions, public surfacing,
-  any future full-catalogue rollout.
+  rotating weekly batches so every allow-listed card refreshes on a fixed
+  cadence (the remaining ~15k cards beyond tonight's 3,000-card slice),
+  and any future full-catalogue rollout.

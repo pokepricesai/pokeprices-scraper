@@ -1,10 +1,12 @@
 name: Recent-sales Pilot (Allow-list Only)
 
-# Block 4B-S-3A — runs the 58-card recent-sales pilot once per night.
+# Block 4B-S-4A — scales the allow-list pilot to 3,000 cards per nightly run.
 #
 # Allow-list source:
 #   public.recent_sales_card_allow_list  (provider='pricecharting' AND enabled=TRUE)
-# Today's count: 58 (seeded by Block 4B-W-2A).
+# Today's count: 17,949 (raw_usd >= $5 cards). The --limit 3000 below caps a
+# single run at the first 3,000 allow-listed cards; the remaining ~15k are NOT
+# processed in one job yet. Rotating weekly batches are the next step.
 #
 # This workflow is INTENTIONALLY isolated from .github/workflows/nightly-scrape.yml.
 # It does NOT enable full-catalogue ingestion, does NOT bypass the allow-list,
@@ -39,13 +41,13 @@ env:
 
 jobs:
   pilot:
-    name: Run 58-card recent-sales pilot
+    name: Run 3000-card recent-sales pilot
     runs-on: ubuntu-latest
-    # 60 min covers the worst case under the configured retry policy
-    # (every card 429'd four times = ~120s/card × 58 = ~117 min would
-    # blow the budget — by design, so a mass-throttle event surfaces
-    # as a job timeout rather than silently absorbing).
-    timeout-minutes: 60
+    # 180 min budget. Happy path at --delay-seconds 1.0 over 3,000 cards is
+    # ~50 min. Headroom absorbs per-card parse/upsert cost and a moderate
+    # rate of retries; a mass-throttle event still surfaces as a timeout
+    # rather than silently absorbing.
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,10 +60,10 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
 
-      - name: Run 58-card recent-sales pilot
+      - name: Run 3000-card recent-sales pilot
         run: |
           python scripts/run_recent_sales_pilot.py \
-            --limit 58 \
-            --delay-seconds 2.0 \
-            --max-retries 4 \
-            --retry-backoff-seconds 12
+            --limit 3000 \
+            --delay-seconds 1.0 \
+            --max-retries 3 \
+            --retry-backoff-seconds 10
