@@ -441,3 +441,75 @@ def test_select_batch_uses_numeric_sort_so_ordering_matches_day_offsets():
     assert [c["pc_id"] for c in batch] == ["3"]
     batch2, _ = pilot._select_batch(cards, offset=1, limit=1)
     assert [c["pc_id"] for c in batch2] == ["20"]
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Block 4B-S-6A — --max-sales-per-grade flag + rotation over a 17,949-row
+# synthetic allow-list (Part A end-to-end at the helper layer)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_parse_args_max_sales_per_grade_default_is_five():
+    import recent_sales_ingestion as rsi
+    args = pilot._parse_args([])
+    assert args.max_sales_per_grade == rsi.DEFAULT_MAX_SALES_PER_GRADE == 5
+
+
+def test_parse_args_max_sales_per_grade_can_be_overridden():
+    args = pilot._parse_args(["--max-sales-per-grade", "5"])
+    assert args.max_sales_per_grade == 5
+
+
+def test_parse_args_max_sales_per_grade_zero_is_explicit_disable():
+    args = pilot._parse_args(["--max-sales-per-grade", "0"])
+    assert args.max_sales_per_grade == 0
+
+
+def test_select_batch_rotation_over_17949_allow_list_covers_full_week():
+    # Walks the day-of-week table from Block 4B-S-5A using the *full*
+    # 17,949-row allow-list shape — proves that with the pagination fix
+    # in place the rotation now sees every row of the allow-list across
+    # Mon–Sat (Sun re-refreshes the head).
+    cards = _mk_cards(range(1, 17_950))
+    seen: set[str] = set()
+    for offset in (0, 3000, 6000, 9000, 12000, 15000):
+        batch, meta = pilot._select_batch(cards, offset=offset, limit=3000)
+        seen.update(c["pc_id"] for c in batch)
+        # Mon–Fri are full 3000; Sat is the 2949-card partial tail.
+        if offset < 15_000:
+            assert len(batch) == 3000
+        else:
+            assert len(batch) == 2949
+        assert meta["allow_list_total"] == 17_949
+    # Every allow-listed card is touched at least once within Mon–Sat.
+    assert seen == {str(i) for i in range(1, 17_950)}
+    # Sunday goes back to the head.
+    sunday, _ = pilot._select_batch(cards, offset=0, limit=3000)
+    assert {c["pc_id"] for c in sunday} == {str(i) for i in range(1, 3001)}
+
+
+def test_no_full_catalogue_flag_introduced_in_this_block():
+    # Re-assert the guard added in 4B-S-5A. Block 4B-S-6A must not have
+    # snuck in a catalogue-bypass flag while adding pagination /
+    # row-cap controls.
+    with pytest.raises(SystemExit):
+        pilot._parse_args(["--full-catalogue"])
+    with pytest.raises(SystemExit):
+        pilot._parse_args(["--ignore-allow-list"])
+    with pytest.raises(SystemExit):
+        pilot._parse_args(["--no-allow-list"])
+
+
+def test_parse_args_prune_default_is_on():
+    args = pilot._parse_args([])
+    assert args.prune_inline is True
+
+
+def test_parse_args_no_prune_disables_inline_prune():
+    args = pilot._parse_args(["--no-prune"])
+    assert args.prune_inline is False
+
+
+def test_parse_args_prune_explicit_keeps_it_on():
+    args = pilot._parse_args(["--prune"])
+    assert args.prune_inline is True

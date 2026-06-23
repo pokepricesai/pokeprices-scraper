@@ -1,10 +1,13 @@
 # Recent-sales pilot — nightly allow-list job
 
-**Block 4B-S-5A.** Rotates the 3,000-card allow-list pilot (Block 4B-S-4A)
-across the week so the full 17,949-row allow-list is refreshed every
-seven days. This is still the *only* automated recent-sales path in the
-scraper repo; full-catalogue ingestion does not exist and is explicitly
-out of scope.
+**Block 4B-S-6A.** Fixes the silent 1,000-row PostgREST cap on the
+allow-list loader and caps inserted `recent_sales` rows at 10 per card
+per grade bucket. Combined with the Block 4B-S-5A weekly rotation, the
+full 17,949-row allow-list is now actually refreshed every seven days
+(prior to the pagination fix, only the first 1,000 sorted IDs were
+considered each night). This is still the *only* automated recent-sales
+path in the scraper repo; full-catalogue ingestion does not exist and
+is explicitly out of scope.
 
 ## What runs
 
@@ -21,8 +24,15 @@ python scripts/run_recent_sales_pilot.py \
   --limit 3000 \
   --delay-seconds 1.0 \
   --max-retries 3 \
-  --retry-backoff-seconds 10
+  --retry-backoff-seconds 10 \
+  --max-sales-per-grade 5
 ```
+
+`--max-sales-per-grade` defaults to 5 if omitted; the workflow relies
+on that default. The inline supersede prune (`--prune`, default on)
+flips older active rows beyond the kept 5 to
+`review_status='superseded'` after each card, so the live table stays
+bounded.
 
 Allow-list source: `public.recent_sales_card_allow_list` filtered to
 `provider='pricecharting' AND enabled=TRUE`. The allow-list contains
@@ -115,6 +125,132 @@ Three options, in increasing order of friction:
 | Cards processed per nightly run outside allow-list | 0 |
 | Days to cover full allow-list once | 6 (Mon–Sat) |
 | Days in the rotation cycle | 7 (Sun re-refreshes the head) |
+| Max active rows kept per card per grade | 5 |
+
+## Allow-list pagination (Block 4B-S-6A)
+
+`SupabaseClient.get_allow_list` reads
+`recent_sales_card_allow_list` filtered to
+`provider='pricecharting' AND enabled=TRUE`. PostgREST applies a
+server-side row cap on a single GET — 1,000 rows by default — so prior
+to this block the loader silently truncated the allow-list. With 17,949
+enabled rows that meant the runner only ever rotated through the first
+1,000 IDs (after the deterministic numeric sort), and ~16k cards were
+never touched.
+
+The fix issues `limit=1000&offset=N` pages with `order=provider_card_id`
+until a short page (`< page_size` rows) is returned. The order clause
+pins page boundaries so concurrent allow-list edits cannot drop or
+duplicate rows mid-paginate. Logging surfaces the full
+`allow_list_total` count so a silent truncation regression is visible.
+
+The page size constant lives at
+`recent_sales_ingestion.ALLOW_LIST_PAGE_SIZE` (= 1000). It is exposed as
+a kwarg only for tests; production callers should leave it at the
+default.
+
+## Per-card / per-grade row cap + inline supersede prune (Block 4B-S-6A)
+
+The product surface (card page) displays the **latest 5 sales per
+grade** filter. `daily_prices` already holds long-form price history;
+`recent_sales` is the credibility/context surface, not a historical
+archive. Storing hundreds of rows per card per scrape is wasteful.
+The runner keeps only the **latest 5 per (card, normalised grade
+key)**, and the prune partitions by that *same key* — never by the
+coarser `observed_section`.
+
+### Grade key (Python — source of truth)
+
+The cap, the prune, and the cleanup SQL all use the same normalised
+key derived from a row's `(observed_section, raw_or_graded,
+grading_company, grade)` quadruple:
+
+- `observed_section == "completed-auctions-used"` OR
+  `raw_or_graded == "raw"` → `"Raw"`
+- otherwise (graded):
+  - both `grading_company` and `grade` present, and `grade` already
+    begins with the company prefix → `grade` verbatim (so
+    `("PSA", "PSA 10")` keys as `"PSA 10"`, not `"PSA PSA 10"`)
+  - both present without prefix overlap → `f"{company} {grade}"`
+  - only one present → that value
+  - neither present → `"Graded"` (last-resort fallback, mirrors the UI)
+
+This means two rows that share an `observed_section` but differ in
+`(company, grade)` — e.g. a generic graded section that mixes PSA 9
+and PSA 10 — are placed in **different** buckets and capped/pruned
+independently.
+
+### Inline supersede prune flow
+
+For each successfully-processed card:
+
+1. **Cap the scrape**: sort OK rows by `sale_date` desc →
+   `parse_confidence` desc → `provider_sale_key` (deterministic
+   tie-break), keep the first 5 per `(card, grade key)`.
+2. **Fetch existing active rows** via PostgREST:
+   ```
+   GET /rest/v1/recent_sales
+       ?select=provider_card_id,provider_sale_key,observed_section,
+               grading_company,grade,raw_or_graded,sale_date,parse_confidence
+       &provider_card_id=eq.<pcid>
+       &parse_status=eq.ok
+       &review_status=eq.active
+   ```
+3. **Union by `provider_sale_key`** with the scrape's kept rows
+   (scrape wins on collision — it carries the freshest parsed metadata).
+4. **Re-cap** the union by the same `(grade key)` partition →
+   `final_keep_psks`.
+5. **Filter the upsert set** to `kept_rows ∩ final_keep_psks` — we
+   never upsert a scrape row only to immediately supersede it.
+6. **PATCH the prune**:
+   ```
+   PATCH /rest/v1/recent_sales
+       ?provider_card_id=eq.<pcid>
+       &parse_status=eq.ok
+       &review_status=eq.active
+       &provider_sale_key=not.in.(<final_keep_psks…>)
+   Body: {"review_status": "superseded"}
+   Prefer: return=representation
+   ```
+   Response body length is the number of rows superseded; counted
+   into `rows_pruned_old_active`.
+
+### Safety properties
+
+- **Card scope**: only cards processed in this run get a PATCH. Cards
+  not visited never see their rows touched.
+- **OK rows only**: `&parse_status=eq.ok` filters quarantined and
+  rejected rows out of the prune's reach by construction.
+- **Active rows only**: `&review_status=eq.active` means rows already
+  marked `superseded` are not re-marked.
+- **Empty keep-set short-circuit**: if `final_keep_psks` is empty
+  (combined input was empty), the prune client returns 0 without
+  issuing a PATCH — we never run a query that would match every OK row
+  for a card.
+- **Grade-aware partition**: the keep set is computed in Python using
+  `_grade_key`, then projected onto `provider_sale_key`s for the
+  PostgREST filter. The DB never has to evaluate the grade-bucket
+  `CASE` for the prune itself, only for the one-time cleanup SQL.
+- **Read failure → no prune, but no data loss**: if the active-rows
+  GET fails, the prune for that card is skipped and the scrape's
+  kept rows are upserted as a fallback. Cap-on-write still bounds the
+  table size; the error is logged and counted in `errors_count`.
+- **PATCH failure → upsert preserved**: if only the PATCH fails (e.g.
+  `review_status` column doesn't exist yet in this environment), the
+  scrape upsert is already buffered and lands normally. The PATCH
+  error is logged and counted in `errors_count`.
+
+### CLI flags
+
+- `--max-sales-per-grade N`. Default `5`. `0` or negative disables
+  the in-runner cap (no row dropping; pruning still runs if enabled).
+- `--prune` / `--no-prune`. Default `--prune`. Disable when a
+  deployment's `recent_sales` schema doesn't carry `review_status` yet;
+  the cap-on-write still bounds new data, just without the active-row
+  prune.
+
+Both flags also flow through `init_for_scraper_run(...)` so the v8
+scraper hook honours the same defaults.
 
 ## Schedule
 
@@ -204,9 +340,11 @@ Database side (one row per run):
   - `notes` JSON carrying `import_type='recent_sales_pilot'`,
     `cards_allowlisted`, `cards_parsed`, `rows_upserted`,
     `errors_count`, `fetched`, `skipped_no_html`, `skipped_429`,
-    `skipped_http_error`, **and the rotation keys**
+    `skipped_http_error`, **the rotation keys**
     `allow_list_total`, `offset`, `effective_offset`, `batch_size`,
-    `selected_start`, `selected_end`
+    `selected_start`, `selected_end`, **and the row-cap / prune keys**
+    `max_sales_per_grade`, `rows_after_grade_cap`,
+    `rows_dropped_by_grade_cap`, `rows_pruned_old_active`
 - `public.recent_sales` — rows for each parsed OK sale, linked by
   `import_run_id` to the run above.
 

@@ -115,6 +115,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--import-type", default="recent_sales_pilot",
                    dest="import_type",
                    help="logical label preserved in market_import_runs.notes JSON")
+    p.add_argument("--max-sales-per-grade", type=int,
+                   default=rsi.DEFAULT_MAX_SALES_PER_GRADE,
+                   dest="max_sales_per_grade",
+                   help=f"cap on OK recent_sales rows written per card per "
+                        f"grade bucket; 0 or negative disables the cap "
+                        f"(default {rsi.DEFAULT_MAX_SALES_PER_GRADE})")
+    # --prune / --no-prune. We mirror argparse's BooleanOptionalAction so
+    # the workflow can pass either form explicitly. Default ON because
+    # the cap alone only bounds new writes — pruning is what keeps the
+    # live table from accumulating.
+    p.add_argument("--prune", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   dest="prune_inline",
+                   help="after each card, PATCH older OK rows for the same "
+                        "(card, grade) bucket to review_status='superseded'. "
+                        "Use --no-prune to skip (default: --prune)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -330,10 +346,15 @@ def main(argv: list[str] | None = None) -> int:
         allow_list,
         dry_run=dry_run,
         import_type=args.import_type,
+        max_sales_per_grade=args.max_sales_per_grade,
+        prune_inline=args.prune_inline,
     )
     ingestion.start()
     # Record rotation context up-front so even a crash mid-loop still
-    # surfaces the slice metadata in market_import_runs.notes.
+    # surfaces the slice metadata in market_import_runs.notes. The
+    # per-grade cap counters (rows_after_grade_cap /
+    # rows_dropped_by_grade_cap) are written by the ingestion module's
+    # own _finalize() so we don't duplicate them here.
     ingestion.add_run_notes(**batch_meta)
 
     # Fetch-outcome counters live in the runner; the ingestion module owns
@@ -406,12 +427,18 @@ def main(argv: list[str] | None = None) -> int:
     log.info(
         "pilot done. mode=%s allow_listed=%d fetched=%d parsed=%d ok=%d "
         "quarantined=%d rejected=%d upserted=%d errors=%d "
-        "skipped_no_html=%d skipped_429=%d skipped_http_error=%d",
+        "skipped_no_html=%d skipped_429=%d skipped_http_error=%d "
+        "cap_kept=%d cap_dropped=%d pruned_old_active=%d "
+        "max_per_grade=%s prune=%s",
         "DRY-RUN" if dry_run else "WRITE",
         ingestion.cards_allowlisted, fetched, ingestion.cards_parsed,
         ingestion.rows_ok, ingestion.rows_quarantined, ingestion.rows_rejected,
         ingestion.rows_upserted, ingestion.errors_count,
         skipped_no_html, skipped_429, skipped_http_error,
+        ingestion.rows_after_grade_cap, ingestion.rows_dropped_by_grade_cap,
+        ingestion.rows_pruned_old_active,
+        ingestion.max_sales_per_grade if (ingestion.max_sales_per_grade or 0) > 0 else "OFF",
+        "ON" if ingestion.prune_inline else "OFF",
     )
     return 0
 

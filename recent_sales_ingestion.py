@@ -60,6 +60,29 @@ MARKET_IMPORT_RUNS_TABLE = "market_import_runs"
 DEFAULT_IMPORT_TYPE = "recent_sales_pilot"
 DEFAULT_UPSERT_BATCH_SIZE = 200
 
+# Block 4B-S-6A — allow-list pagination
+# PostgREST caps a single GET at 1000 rows by default. Until the allow-list
+# was 58 entries that was invisible; at 17,949 entries it silently truncated
+# the rotation universe to the first 1,000 rows. The loader now pages
+# through the table 1,000 rows at a time until a short page is returned.
+ALLOW_LIST_PAGE_SIZE = 1000
+
+# Block 4B-S-6A — per-card / per-grade row cap
+# The card page displays the latest 5 sales per selected grade.
+# ``daily_prices`` already holds long-form price history; ``recent_sales``
+# is the credibility/context surface, not a historical archive. Weekly
+# rotation keeps the latest 5 fresh, so we cap inserts at 5 per
+# (card, grade bucket) and prune older active rows after each card so
+# the table size doesn't grow without bound.
+DEFAULT_MAX_SALES_PER_GRADE = 5
+
+# Sentinel returned by ``_grade_key`` for ungraded rows; matches the
+# "Raw" pill on the card page.
+_GRADE_KEY_RAW = "Raw"
+# Last-resort label for graded rows that lost both company AND grade.
+# Mirrors the web display's fallback so the cap groups consistently.
+_GRADE_KEY_GRADED_FALLBACK = "Graded"
+
 # Fields produced by the parser that we never POST to recent_sales.
 # Block 4B-W-1 schema confirmed: the recent_sales table requires
 # ``anomaly_flags`` (NOT NULL jsonb) and accepts ``raw_metadata`` (nullable
@@ -114,6 +137,198 @@ _IMPORT_TYPE_TO_DB_SOURCE = {
     "admin_manual":                  "admin_manual",
     "backfill":                      "backfill",
 }
+
+
+def _grade_key(row: Any) -> str:
+    """Normalised grade-bucket label used by the per-card row cap and
+    the inline supersede prune.
+
+    The label matches the vocabulary the web card page filters on:
+
+      ``"Raw"``                 — ungraded sale. Detected when
+                                  ``observed_section == "completed-auctions-used"``
+                                  OR ``raw_or_graded == "raw"`` (the
+                                  latter is the canonical DB column for
+                                  rows fetched at prune time; the former
+                                  is what fresh ``SaleRow`` carries).
+      ``"<COMPANY> <GRADE>"``   — e.g. ``"PSA 10"``, ``"BGS 9.5"``.
+                                  Collapses the common "double-prefix"
+                                  parser output where ``grade`` already
+                                  starts with the company name (so
+                                  ``("PSA", "PSA 10")`` keys as
+                                  ``"PSA 10"``, not ``"PSA PSA 10"``).
+      ``"<GRADE>"`` or
+      ``"<COMPANY>"``           — when only one of the two is present.
+      ``"Graded"``              — graded section but no usable company
+                                  or grade text. Mirrors the UI's
+                                  last-resort fallback.
+
+    Critically, two rows that share an ``observed_section`` but differ
+    in ``(grading_company, grade)`` produce **different** keys — so the
+    cap and the prune cannot accidentally treat e.g. PSA 9 and PSA 10
+    as the same bucket just because they came from the same section.
+
+    Accepts either a ``SaleRow`` dataclass or the post-``to_dict`` dict
+    (which is the shape rows fetched from PostgREST take), so the cap
+    can be applied to scrape output AND DB rows with one helper.
+    """
+    if isinstance(row, dict):
+        section = (row.get("observed_section") or "").strip()
+        company = (row.get("grading_company") or "").strip()
+        grade = (row.get("grade") or "").strip()
+        raw_or_graded = (row.get("raw_or_graded") or "").strip()
+    else:
+        section = (getattr(row, "observed_section", None) or "").strip()
+        company = (getattr(row, "grading_company", None) or "").strip()
+        grade = (getattr(row, "grade", None) or "").strip()
+        raw_or_graded = (getattr(row, "raw_or_graded", None) or "").strip()
+
+    if section == "completed-auctions-used" or raw_or_graded == "raw":
+        return _GRADE_KEY_RAW
+    if not company and not grade:
+        return _GRADE_KEY_GRADED_FALLBACK
+    if not grade:
+        return company
+    if not company:
+        return grade
+    if grade.lower().startswith(company.lower()):
+        return grade
+    return f"{company} {grade}"
+
+
+def _provider_sale_key_of(row: Any) -> str | None:
+    """Read ``provider_sale_key`` from either a SaleRow or a dict."""
+    if isinstance(row, dict):
+        return row.get("provider_sale_key")
+    return getattr(row, "provider_sale_key", None)
+
+
+def _grade_cap_sort_key(row: Any) -> tuple:
+    """Sort key for the per-grade cap: latest sale first, then
+    highest confidence, then ``provider_sale_key`` for a deterministic
+    tie-break across runs (so two scrapes against the same HTML keep
+    the same rows). Uses ``reverse=True`` on the tuple in
+    ``_cap_rows_per_grade`` so all three dimensions are descending.
+
+    Missing values default to a low-ranking sentinel so rows with no
+    ``sale_date`` (defensive — OK rows always have one) sort last."""
+    if isinstance(row, dict):
+        sale_date = row.get("sale_date") or ""
+        confidence = row.get("parse_confidence") or 0
+        psk = row.get("provider_sale_key") or ""
+    else:
+        sale_date = getattr(row, "sale_date", None) or ""
+        confidence = getattr(row, "parse_confidence", 0) or 0
+        psk = getattr(row, "provider_sale_key", None) or ""
+    return (sale_date, int(confidence), psk)
+
+
+def _cap_rows_per_grade(
+    rows: list,
+    *,
+    max_per_grade: int,
+) -> tuple[list, int]:
+    """Keep at most ``max_per_grade`` rows per ``(provider_card_id, grade_key)``
+    bucket. Returns ``(kept_rows, dropped_count)``.
+
+    Sort is deterministic across runs (see ``_grade_cap_sort_key``) so
+    re-running a card against unchanged HTML produces the same surviving
+    set — important for ``provider_sale_key``-keyed upsert idempotence.
+
+    Pass ``max_per_grade <= 0`` to disable the cap; all rows are kept and
+    ``dropped_count`` is 0. ``None`` is treated the same way so callers can
+    pre-empt with a default-from-CLI of ``None``.
+    """
+    if max_per_grade is None or max_per_grade <= 0:
+        return list(rows), 0
+
+    groups: dict[tuple[str, str], list] = {}
+    for r in rows:
+        pcid = (
+            r.get("provider_card_id") if isinstance(r, dict)
+            else getattr(r, "provider_card_id", "")
+        ) or ""
+        groups.setdefault((str(pcid), _grade_key(r)), []).append(r)
+
+    kept: list = []
+    dropped = 0
+    for group in groups.values():
+        group.sort(key=_grade_cap_sort_key, reverse=True)
+        kept.extend(group[:max_per_grade])
+        excess = len(group) - max_per_grade
+        if excess > 0:
+            dropped += excess
+    return kept, dropped
+
+
+def _compute_card_final_keep(
+    *,
+    provider_card_id: str,
+    existing_active_rows: list[dict],
+    scrape_kept_rows: list,
+    max_per_grade: int | None,
+) -> tuple[set[str], list]:
+    """Compute the per-card final keep set across (existing active OK
+    rows in DB) ∪ (rows the scrape's per-card cap retained).
+
+    Returns ``(final_keep_psks, scrape_rows_to_upsert)``:
+
+      * ``final_keep_psks`` — the set of ``provider_sale_key`` values
+        that should remain ``review_status='active'`` after this card
+        is processed. Rows whose psk is NOT in this set should be
+        superseded (existing rows in DB) or skipped (scrape rows).
+      * ``scrape_rows_to_upsert`` — subset of ``scrape_kept_rows``
+        whose psk survived the combined cap; these are the rows that
+        should be sent to ``upsert_recent_sales``. Filtering here
+        means we never upsert a row only to immediately supersede it.
+
+    Combination semantics: rows are deduped by ``provider_sale_key``;
+    on collision the scrape row wins (it's freshly parsed, may carry
+    refined metadata). The combined list is then re-capped using the
+    *same* ``_grade_key`` + ``_grade_cap_sort_key`` the runtime cap
+    uses, so the prune's keep set matches the display's view of "latest
+    N per grade".
+
+    All rows are projected onto ``provider_card_id`` before the cap so
+    existing DB rows (which may have been fetched without an explicit
+    ``provider_card_id`` column) and freshly-parsed SaleRows bucket
+    together within this card. ``_cap_rows_per_grade`` partitions by
+    ``(provider_card_id, grade_key)``, and we want a single per-grade
+    cap here, not two.
+    """
+    by_psk: dict[str, Any] = {}
+    # Existing first, then scrape — scrape overwrites collisions.
+    for r in existing_active_rows:
+        psk = _provider_sale_key_of(r)
+        if psk:
+            row = dict(r)
+            # Inject the caller's pcid so the per-(card, grade) cap
+            # buckets DB rows together with scrape rows even if the
+            # DB SELECT didn't pull provider_card_id.
+            row.setdefault("provider_card_id", provider_card_id)
+            by_psk[str(psk)] = row
+    for r in scrape_kept_rows:
+        psk = _provider_sale_key_of(r)
+        if psk:
+            by_psk[str(psk)] = r
+
+    if not by_psk:
+        return set(), []
+
+    combined = list(by_psk.values())
+    final_keep, _dropped = _cap_rows_per_grade(
+        combined, max_per_grade=max_per_grade,
+    )
+    final_keep_psks = {
+        str(_provider_sale_key_of(r))
+        for r in final_keep
+        if _provider_sale_key_of(r)
+    }
+    scrape_to_upsert = [
+        r for r in scrape_kept_rows
+        if (_provider_sale_key_of(r) or "") and str(_provider_sale_key_of(r)) in final_keep_psks
+    ]
+    return final_keep_psks, scrape_to_upsert
 
 
 def _resolve_db_source(import_type: str) -> str:
@@ -182,26 +397,67 @@ class SupabaseClient:
         }
 
     # — allow-list ————————————————————————————————————————————————————————
-    def get_allow_list(self, *, provider: str = "pricecharting") -> set[str]:
-        """Return the set of provider_card_id strings enabled for ingestion."""
-        url = (
-            f"{self.url}/rest/v1/{ALLOW_LIST_TABLE}"
-            f"?select=provider_card_id"
-            f"&provider=eq.{provider}"
-            f"&enabled=eq.true"
-        )
-        resp = self.session.get(url, headers=self._headers, timeout=self.timeout)
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"allow-list fetch failed: HTTP {resp.status_code} {resp.text[:200]}"
-            )
-        rows = resp.json() if resp.text else []
+    def get_allow_list(
+        self,
+        *,
+        provider: str = "pricecharting",
+        page_size: int = ALLOW_LIST_PAGE_SIZE,
+    ) -> set[str]:
+        """Return the set of ``provider_card_id`` strings enabled for ingestion.
+
+        PostgREST applies a server-side cap on result-set size — by default
+        1,000 rows — so a single GET silently truncates large tables. The
+        loader pages through with ``limit=<page_size>&offset=<n>`` until a
+        page returns fewer than ``page_size`` rows (the conventional EOF
+        signal for offset-pagination). An explicit ``order=provider_card_id``
+        is added so pages don't drift when concurrent writes reshape the
+        physical row order.
+
+        ``page_size`` is exposed only for tests; production code should
+        leave it at the module default (1,000).
+        """
+        if page_size <= 0:
+            raise ValueError(f"page_size must be > 0, got {page_size!r}")
         out: set[str] = set()
-        for row in rows:
-            v = row.get("provider_card_id")
-            if v is None:
-                continue
-            out.add(str(v))
+        offset = 0
+        # Hard ceiling on iterations: if the table somehow keeps returning
+        # full pages forever (e.g. a misconfigured PostgREST), we want to
+        # bail out rather than spin. 10M rows worth of headroom is far past
+        # any plausible allow-list and keeps test failures fast.
+        max_pages = max(1, 10_000_000 // page_size)
+        for _ in range(max_pages):
+            url = (
+                f"{self.url}/rest/v1/{ALLOW_LIST_TABLE}"
+                f"?select=provider_card_id"
+                f"&provider=eq.{provider}"
+                f"&enabled=eq.true"
+                f"&order=provider_card_id"
+                f"&limit={page_size}"
+                f"&offset={offset}"
+            )
+            resp = self.session.get(url, headers=self._headers, timeout=self.timeout)
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"allow-list fetch failed: HTTP {resp.status_code} {resp.text[:200]}"
+                )
+            rows = resp.json() if resp.text else []
+            for row in rows:
+                v = row.get("provider_card_id")
+                if v is None:
+                    continue
+                out.add(str(v))
+            # Conventional offset-pagination EOF: a short page means the
+            # next offset is past the end.
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        else:
+            # Loop ran to max_pages without ever seeing a short page.
+            log.warning(
+                "allow-list pagination hit safety ceiling at %d pages "
+                "(page_size=%d, loaded=%d). Returning partial result.",
+                max_pages, page_size, len(out),
+            )
         return out
 
     # — recent_sales ——————————————————————————————————————————————————————
@@ -223,6 +479,101 @@ class SupabaseClient:
                 f"recent_sales upsert failed: HTTP {resp.status_code} {resp.text[:300]}"
             )
         return len(rows)
+
+    # — read existing active rows for combined grade-aware cap —————————————
+    # Columns selected are the minimum needed to reproduce the runtime
+    # grade key + sort: identity, sort, and the three grade-bucket
+    # signals (observed_section / grading_company / grade / raw_or_graded).
+    _ACTIVE_FETCH_COLUMNS = (
+        "provider_card_id,provider_sale_key,observed_section,"
+        "grading_company,grade,raw_or_graded,sale_date,parse_confidence"
+    )
+
+    def get_active_recent_sales_for_card(
+        self,
+        *,
+        provider_card_id: str,
+    ) -> list[dict]:
+        """Fetch the *currently-active* OK ``recent_sales`` rows for a
+        single card. The prune combines these with the just-scraped
+        rows and re-applies the per-grade cap so the kept set reflects
+        DB state, not just the scrape.
+
+        Filters: ``parse_status=eq.ok`` and ``review_status=eq.active``.
+        Rows in any other parse_status (quarantined / rejected) or
+        review_status (NULL / superseded) are intentionally excluded —
+        the prune must not touch them.
+        """
+        url = (
+            f"{self.url}/rest/v1/{RECENT_SALES_TABLE}"
+            f"?select={self._ACTIVE_FETCH_COLUMNS}"
+            f"&provider_card_id=eq.{provider_card_id}"
+            f"&parse_status=eq.ok"
+            f"&review_status=eq.active"
+        )
+        resp = self.session.get(url, headers=self._headers, timeout=self.timeout)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"active recent_sales fetch failed: HTTP {resp.status_code} "
+                f"{resp.text[:300]}"
+            )
+        rows = resp.json() if resp.text else []
+        return [dict(r) for r in rows] if isinstance(rows, list) else []
+
+    # — supersede prune (Block 4B-S-6A, revised) —————————————————————————
+    def prune_recent_sales_superseded(
+        self,
+        *,
+        provider_card_id: str,
+        kept_provider_sale_keys: list[str],
+    ) -> int:
+        """Mark every active OK ``recent_sales`` row for this card as
+        ``review_status='superseded'`` EXCEPT the rows whose
+        ``provider_sale_key`` is in ``kept_provider_sale_keys`` (the
+        post-combined-cap keep set, latest-N per normalised grade key
+        across existing active + just-scraped rows).
+
+        The partition is *card-wide* — NOT per ``observed_section`` —
+        because two rows can share an ``observed_section`` while
+        belonging to different normalised grade buckets (e.g. PSA 9 vs
+        PSA 10 inside a generic graded section). The caller is
+        responsible for computing the keep set in Python using
+        ``_grade_key`` so the prune matches the runtime cap exactly.
+
+        Returns the number of rows the PATCH affected (PostgREST
+        ``return=representation`` body length). The call is idempotent:
+        re-running with the same keep-set is a no-op (no rows match
+        ``review_status=eq.active AND psk NOT IN keep`` the second time).
+
+        Designed to no-op safely if ``kept_provider_sale_keys`` is empty
+        — we never issue a query that would match every OK row for the
+        card, since that would be hard to undo and is rarely the
+        intent.
+        """
+        if not kept_provider_sale_keys:
+            return 0
+        # Hex sha256 ``provider_sale_key`` values have no characters
+        # PostgREST's IN-list syntax cares about. Future PSKs that ever
+        # contain ``,()`` would need quoting; today's hashes are safe.
+        in_clause = ",".join(str(k) for k in kept_provider_sale_keys)
+        url = (
+            f"{self.url}/rest/v1/{RECENT_SALES_TABLE}"
+            f"?provider_card_id=eq.{provider_card_id}"
+            f"&parse_status=eq.ok"
+            f"&review_status=eq.active"
+            f"&provider_sale_key=not.in.({in_clause})"
+        )
+        headers = {**self._headers, "Prefer": "return=representation"}
+        body = {"review_status": "superseded"}
+        resp = self.session.patch(url, json=body, headers=headers, timeout=self.timeout)
+        if resp.status_code not in (200, 204):
+            raise RuntimeError(
+                f"recent_sales prune failed: HTTP {resp.status_code} {resp.text[:300]}"
+            )
+        if resp.status_code == 204:
+            return 0
+        returned = resp.json() if resp.text else []
+        return len(returned) if isinstance(returned, list) else 0
 
     # — market_import_runs ————————————————————————————————————————————————
     def insert_market_run(self, payload: dict) -> str | None:
@@ -301,12 +652,25 @@ class RecentSalesIngestion:
         dry_run: bool = False,
         import_type: str = DEFAULT_IMPORT_TYPE,
         upsert_batch_size: int = DEFAULT_UPSERT_BATCH_SIZE,
+        max_sales_per_grade: int | None = DEFAULT_MAX_SALES_PER_GRADE,
+        prune_inline: bool = True,
     ):
         self.supabase = supabase
         self.allow_list: set[str] = {str(x) for x in allow_list}
         self.dry_run = bool(dry_run)
         self.import_type = import_type
         self.upsert_batch_size = max(1, upsert_batch_size)
+        # ``None`` or non-positive disables the cap entirely. The runner's
+        # default is 5 (DEFAULT_MAX_SALES_PER_GRADE); tests can opt out by
+        # passing 0 / None.
+        self.max_sales_per_grade = max_sales_per_grade
+        # When True, every successfully-processed card issues a PATCH to
+        # mark its OK rows beyond the kept set as
+        # ``review_status='superseded'``. Defaults on so the per-grade
+        # cap is enforced not just on new writes but on the live table.
+        # Disable via the runner's ``--no-prune`` if a deployment's
+        # ``recent_sales`` schema does not yet carry ``review_status``.
+        self.prune_inline = bool(prune_inline)
         self.run_id: str | None = None
 
         # Stats — surfaced to logs + market_import_runs on finish().
@@ -318,6 +682,16 @@ class RecentSalesIngestion:
         self.rows_rejected = 0
         self.rows_upserted = 0
         self.errors_count = 0
+        # Block 4B-S-6A row-cap counters. ``rows_after_grade_cap`` is the
+        # number of OK rows that survived the cap (i.e. the count of rows
+        # that will be sent to ``recent_sales``). ``rows_dropped_by_grade_cap``
+        # is the count discarded — useful for spotting cards where the cap
+        # is biting harder than expected. ``rows_pruned_old_active`` is the
+        # number of pre-existing OK rows the inline supersede prune flipped
+        # to ``review_status='superseded'``.
+        self.rows_after_grade_cap = 0
+        self.rows_dropped_by_grade_cap = 0
+        self.rows_pruned_old_active = 0
 
         self._buffer: list[dict] = []
         # Monotonic timestamp set in start(); used to populate
@@ -443,14 +817,87 @@ class RecentSalesIngestion:
         self.rows_quarantined += q_count
         self.rows_rejected += r_count
 
+        # Apply the per-card/per-grade cap before buffering or counting
+        # ``rows_after_grade_cap``. We do this even in dry-run so the
+        # summary log reflects what *would* be written. The cap is per
+        # card (one ``maybe_ingest`` call = one card), which is the
+        # natural scope: PriceCharting returns ≤ ~20 sales per grade
+        # bucket per page, and the UI only ever shows latest 5/grade.
+        kept_rows, dropped_rows = _cap_rows_per_grade(
+            ok_rows, max_per_grade=self.max_sales_per_grade,
+        )
+        self.rows_after_grade_cap += len(kept_rows)
+        self.rows_dropped_by_grade_cap += dropped_rows
+
         log.info(
-            "recent-sales: card_id=%s status=%s sections=%d total_rows=%d ok=%d q=%d rej=%d",
+            "recent-sales: card_id=%s status=%s sections=%d total_rows=%d "
+            "ok=%d q=%d rej=%d cap_kept=%d cap_dropped=%d",
             pcid, result.parse_status, result.section_count, result.row_count,
-            len(ok_rows), q_count, r_count,
+            len(ok_rows), q_count, r_count, len(kept_rows), dropped_rows,
         )
 
-        if ok_rows and not self.dry_run and self.supabase is not None:
-            self._buffer.extend(_sale_row_to_db_row(r) for r in ok_rows)
+        if kept_rows and not self.dry_run and self.supabase is not None:
+            if self.prune_inline:
+                # Grade-aware prune. The cap and the prune partition by
+                # ``_grade_key(row)`` (not ``observed_section``) so a
+                # generic section that mixes e.g. PSA 9 and PSA 10
+                # rows is split into independent buckets. We:
+                #   1. Read currently-active OK rows for this card.
+                #   2. Union with the scrape's kept set (by psk).
+                #   3. Re-cap by grade key → final_keep_psks.
+                #   4. Upsert only the scrape rows whose psk survived
+                #      the combined cap (avoid writing rows we'd
+                #      immediately supersede).
+                #   5. PATCH everything else for this card to
+                #      ``review_status='superseded'``.
+                #
+                # Failures at step 1 (read) skip the prune for this
+                # card AND fall back to upserting all scrape kept rows
+                # — the cap-on-write still bounds the table size.
+                try:
+                    existing_active = self.supabase.get_active_recent_sales_for_card(
+                        provider_card_id=pcid,
+                    )
+                except Exception as e:
+                    self.errors_count += 1
+                    log.exception(
+                        "recent-sales: active-rows fetch failed for card_id=%s: %s; "
+                        "falling back to scrape-only upsert (no prune)",
+                        pcid, e,
+                    )
+                    existing_active = None
+
+                if existing_active is None:
+                    # Read failed — upsert the scrape kept set without
+                    # pruning. The cap-on-write still bounds the
+                    # incoming volume.
+                    self._buffer.extend(_sale_row_to_db_row(r) for r in kept_rows)
+                else:
+                    final_keep_psks, scrape_to_upsert = _compute_card_final_keep(
+                        provider_card_id=pcid,
+                        existing_active_rows=existing_active,
+                        scrape_kept_rows=kept_rows,
+                        max_per_grade=self.max_sales_per_grade,
+                    )
+                    self._buffer.extend(
+                        _sale_row_to_db_row(r) for r in scrape_to_upsert
+                    )
+                    try:
+                        n = self.supabase.prune_recent_sales_superseded(
+                            provider_card_id=pcid,
+                            kept_provider_sale_keys=sorted(final_keep_psks),
+                        )
+                        self.rows_pruned_old_active += n
+                    except Exception as e:
+                        self.errors_count += 1
+                        log.exception(
+                            "recent-sales: prune failed for card_id=%s: %s",
+                            pcid, e,
+                        )
+            else:
+                # Prune disabled — upsert the full scrape kept set.
+                self._buffer.extend(_sale_row_to_db_row(r) for r in kept_rows)
+
             if len(self._buffer) >= self.upsert_batch_size:
                 self.flush()
 
@@ -545,6 +992,13 @@ class RecentSalesIngestion:
                 "cards_parsed": self.cards_parsed,
                 "rows_upserted": self.rows_upserted,
                 "errors_count": self.errors_count,
+                # Block 4B-S-6A per-grade row-cap audit fields. Kept inside
+                # ``notes`` to avoid a schema change. ``None`` here means
+                # the cap was disabled for this run.
+                "max_sales_per_grade": self.max_sales_per_grade,
+                "rows_after_grade_cap": self.rows_after_grade_cap,
+                "rows_dropped_by_grade_cap": self.rows_dropped_by_grade_cap,
+                "rows_pruned_old_active": self.rows_pruned_old_active,
             }, sort_keys=True),
         }
         try:
@@ -632,7 +1086,12 @@ def parse_expected_card_number(product_name: str | None) -> str | None:
 # Scraper integration entry point
 # ────────────────────────────────────────────────────────────────────────────
 
-def init_for_scraper_run(*, import_type: str = DEFAULT_IMPORT_TYPE) -> RecentSalesIngestion | None:
+def init_for_scraper_run(
+    *,
+    import_type: str = DEFAULT_IMPORT_TYPE,
+    max_sales_per_grade: int | None = DEFAULT_MAX_SALES_PER_GRADE,
+    prune_inline: bool = True,
+) -> RecentSalesIngestion | None:
     """
     Convenience initialiser used by pokeprices_scraper_v8 inside its main().
 
@@ -662,6 +1121,12 @@ def init_for_scraper_run(*, import_type: str = DEFAULT_IMPORT_TYPE) -> RecentSal
     if not allow_list:
         log.warning("recent-sales: allow-list is empty; no cards will be ingested")
 
-    ig = RecentSalesIngestion(supabase, allow_list, dry_run=dry_run, import_type=import_type)
+    ig = RecentSalesIngestion(
+        supabase, allow_list,
+        dry_run=dry_run,
+        import_type=import_type,
+        max_sales_per_grade=max_sales_per_grade,
+        prune_inline=prune_inline,
+    )
     ig.start()
     return ig
