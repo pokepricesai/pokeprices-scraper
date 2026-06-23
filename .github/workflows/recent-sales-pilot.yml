@@ -1,12 +1,23 @@
 name: Recent-sales Pilot (Allow-list Only)
 
-# Block 4B-S-4A — scales the allow-list pilot to 3,000 cards per nightly run.
+# Block 4B-S-5A — rotates the 3,000-card allow-list pilot across the week.
 #
 # Allow-list source:
 #   public.recent_sales_card_allow_list  (provider='pricecharting' AND enabled=TRUE)
-# Today's count: 17,949 (raw_usd >= $5 cards). The --limit 3000 below caps a
-# single run at the first 3,000 allow-listed cards; the remaining ~15k are NOT
-# processed in one job yet. Rotating weekly batches are the next step.
+# Current count: 17,949 (raw_usd >= $5 cards). The runner deterministically
+# sorts the allow-list and processes `--limit 3000` rows starting at
+# `--offset $OFFSET`. The offset is computed from the UTC weekday so each
+# day refreshes a different slice; over the week the full allow-list is
+# covered.
+#
+# Day → offset map (UTC):
+#   Mon (1) →     0  → rows 1-3000
+#   Tue (2) →  3000  → rows 3001-6000
+#   Wed (3) →  6000  → rows 6001-9000
+#   Thu (4) →  9000  → rows 9001-12000
+#   Fri (5) → 12000  → rows 12001-15000
+#   Sat (6) → 15000  → rows 15001-17949 (partial tail = 2949 cards)
+#   Sun (7) →     0  → rows 1-3000 (high-value head re-refresh)
 #
 # This workflow is INTENTIONALLY isolated from .github/workflows/nightly-scrape.yml.
 # It does NOT enable full-catalogue ingestion, does NOT bypass the allow-list,
@@ -60,9 +71,29 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
 
+      # Day-of-week → offset (see header comment for the full map).
+      # `date -u +%u` returns 1=Mon … 7=Sun. Sunday is pinned to offset 0
+      # so the high-value head of the allow-list gets re-refreshed at the
+      # week boundary; every other day advances by one 3000-card slice.
+      # If you need to manually run a different slice, use
+      # workflow_dispatch + edit the OFFSET below, or run the script
+      # locally with `--offset <N> --batch-size 3000`.
+      - name: Compute weekly rotation offset
+        id: rotation
+        run: |
+          DOW=$(date -u +%u)
+          if [ "$DOW" = "7" ]; then
+            OFFSET=0
+          else
+            OFFSET=$(( (DOW - 1) * 3000 ))
+          fi
+          echo "UTC weekday=$DOW → offset=$OFFSET"
+          echo "offset=$OFFSET" >> "$GITHUB_OUTPUT"
+
       - name: Run 3000-card recent-sales pilot
         run: |
           python scripts/run_recent_sales_pilot.py \
+            --offset ${{ steps.rotation.outputs.offset }} \
             --limit 3000 \
             --delay-seconds 1.0 \
             --max-retries 3 \

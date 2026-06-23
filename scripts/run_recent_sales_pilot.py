@@ -1,22 +1,26 @@
 """
-scripts/run_recent_sales_pilot.py — Block 4B-S-2A
+scripts/run_recent_sales_pilot.py — Block 4B-S-2A / 4B-S-4A / 4B-S-5A
 
 Manual runner for the recent-sales pilot. Fetches **only allow-listed**
 PriceCharting card pages, parses them with the standalone parser, and
 optionally writes the OK rows to ``recent_sales`` via the Supabase REST
 client used by the nightly scraper.
 
-This script is deliberately NOT scheduled. It exists so an engineer can
-run a small, observable pilot end-to-end without invoking the nightly
-40k-card scrape.
+This script is deliberately NOT scheduled directly; the scheduled
+nightly workflow (Block 4B-S-3A / 4B-S-4A) invokes it with a fixed
+batch size, and Block 4B-S-5A added day-of-week ``--offset`` rotation
+on top so the full allow-list is refreshed across the week.
 
 Safety guarantees
 -----------------
 * Default mode is dry-run + ingestion-flag-off → script refuses to write.
 * The ingestion flag (``RECENT_SALES_INGESTION_ENABLED=true``) is checked
   in addition to ``--dry-run``. Both must be aligned to write.
-* ``--limit`` bounds the number of HTTP fetches; the allow-list has 58
-  entries today.
+* ``--limit`` / ``--batch-size`` bounds the number of HTTP fetches per
+  run; the allow-list currently has ~17,949 entries.
+* ``--offset`` selects which slice of the (deterministically sorted)
+  allow-list to process. The slice never escapes the allow-list — there
+  is no "full catalogue" path.
 * No row is written when ``--dry-run`` is set. A market_import_runs row is
   NOT created in dry-run.
 
@@ -39,8 +43,8 @@ Usage (PowerShell)
     $env:RECENT_SALES_INGESTION_ENABLED="true"
     python scripts/run_recent_sales_pilot.py --limit 5
 
-    # Full 58-card pilot with gentler pacing:
-    python scripts/run_recent_sales_pilot.py --delay-seconds 2.0 --max-retries 4
+    # Manually run a specific rotation slice (e.g. Wednesday's batch):
+    python scripts/run_recent_sales_pilot.py --offset 6000 --batch-size 3000
 """
 
 from __future__ import annotations
@@ -81,8 +85,18 @@ def _configure_logging(verbose: bool) -> None:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--limit", type=int, default=None,
-                   help="cap on number of allow-listed cards to fetch")
+    # ``--batch-size`` is the preferred name (matches the rotation
+    # vocabulary in the workflow + docs). ``--limit`` is retained as an
+    # alias so the old --limit 58 / --limit 3000 invocations keep working;
+    # argparse routes both to ``args.limit``.
+    p.add_argument("--limit", "--batch-size", type=int, default=None,
+                   dest="limit",
+                   help="cap on number of allow-listed cards to fetch this run "
+                        "(alias: --batch-size)")
+    p.add_argument("--offset", type=int, default=0,
+                   help="0-based index into the sorted allow-list to start at; "
+                        "values >= allow-list size wrap via modulo "
+                        "(default 0 = first batch)")
     p.add_argument("--dry-run", action="store_true",
                    help="parse only; do not write recent_sales or market_import_runs")
     p.add_argument("--delay-seconds", type=float, default=DEFAULT_DELAY_SECONDS,
@@ -103,6 +117,89 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="logical label preserved in market_import_runs.notes JSON")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
+
+
+def _sort_allowlist(cards: list[dict]) -> list[dict]:
+    """
+    Deterministic sort over the per-card dicts produced by
+    ``load_cards_from_pc_csvs``.
+
+    Sort key is the ``pc_id`` (= ``provider_card_id``). When every
+    ``pc_id`` is a string of pure digits we sort numerically so that
+    "9" precedes "10" (which matters for the day-of-week rotation logic
+    — the batches must be stable across runs). When any ``pc_id`` is not
+    purely numeric we fall back to lexicographic sort; both branches are
+    deterministic. Returns a new list; the input is not mutated.
+    """
+    pcids = [str(c.get("pc_id", "")) for c in cards]
+    if pcids and all(p.isdigit() for p in pcids):
+        return sorted(cards, key=lambda c: (int(str(c["pc_id"])), str(c["pc_id"])))
+    return sorted(cards, key=lambda c: str(c.get("pc_id", "")))
+
+
+def _select_batch(
+    allowed_cards: list[dict],
+    *,
+    offset: int,
+    limit: int | None,
+) -> tuple[list[dict], dict]:
+    """
+    Pick the day-of-week batch from the allow-list.
+
+    Inputs:
+      ``allowed_cards`` — the CSV-derived list of per-card dicts already
+        intersected with the allow-list (i.e. only allow-listed entries).
+      ``offset``        — caller-supplied start index (may exceed the
+        list size; in that case we modulo-wrap to keep the runner usable
+        even if the workflow's day-of-week math overshoots).
+      ``limit``         — batch size; ``None`` means "all rows from
+        ``effective_offset`` to the end". The slice never wraps inside
+        the batch — when ``effective_offset + limit`` exceeds the list
+        length we simply return the partial tail. This is the documented
+        behaviour for Saturday (offset 15000 + 3000 → 2949 cards) and
+        keeps the contract simple ("one slice per run").
+
+    Returns ``(batch, meta)`` where ``meta`` carries the audit values
+    that end up in ``market_import_runs.notes`` via
+    ``add_run_notes()``: ``allow_list_total``, ``offset`` (raw),
+    ``effective_offset`` (post-modulo), ``batch_size`` (= limit), and
+    1-based ``selected_start`` / ``selected_end`` markers. The meta is
+    populated even for an empty result so the run notes always carry the
+    rotation context.
+    """
+    sorted_cards = _sort_allowlist(allowed_cards)
+    total = len(sorted_cards)
+    raw_offset = int(offset)
+    batch_size_for_meta: int | None = int(limit) if limit is not None else None
+
+    if total == 0:
+        return [], {
+            "allow_list_total": 0,
+            "offset": raw_offset,
+            "effective_offset": 0,
+            "batch_size": batch_size_for_meta,
+            "selected_start": 0,
+            "selected_end": 0,
+        }
+
+    # Non-negative modulo keeps ``effective_offset`` in [0, total).
+    effective_offset = raw_offset % total if raw_offset >= 0 else (raw_offset % total)
+    if limit is None:
+        end = total
+    else:
+        end = min(effective_offset + int(limit), total)
+
+    batch = sorted_cards[effective_offset:end]
+    meta = {
+        "allow_list_total": total,
+        "offset": raw_offset,
+        "effective_offset": effective_offset,
+        "batch_size": batch_size_for_meta,
+        # 1-based for human-readable run notes; 0/0 when batch is empty.
+        "selected_start": (effective_offset + 1) if batch else 0,
+        "selected_end": end if batch else 0,
+    }
+    return batch, meta
 
 
 def _fetch_with_retry(
@@ -211,9 +308,18 @@ def main(argv: list[str] | None = None) -> int:
         log.warning("%d allow-list ids not found in pc_csvs (sample=%s)",
                     len(unmatched), unmatched[:5])
 
-    if args.limit is not None:
-        allowed_cards = allowed_cards[: args.limit]
-        log.info("--limit %d applied; processing %d cards", args.limit, len(allowed_cards))
+    allowed_cards, batch_meta = _select_batch(
+        allowed_cards, offset=args.offset, limit=args.limit,
+    )
+    log.info(
+        "rotation: allow_list_total=%d offset=%d effective_offset=%d "
+        "batch_size=%s selected=%d (rows %d-%d)",
+        batch_meta["allow_list_total"], batch_meta["offset"],
+        batch_meta["effective_offset"],
+        "ALL" if batch_meta["batch_size"] is None else batch_meta["batch_size"],
+        len(allowed_cards),
+        batch_meta["selected_start"], batch_meta["selected_end"],
+    )
 
     if not allowed_cards:
         log.warning("no allow-listed cards to process; exiting")
@@ -226,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
         import_type=args.import_type,
     )
     ingestion.start()
+    # Record rotation context up-front so even a crash mid-loop still
+    # surfaces the slice metadata in market_import_runs.notes.
+    ingestion.add_run_notes(**batch_meta)
 
     # Fetch-outcome counters live in the runner; the ingestion module owns
     # parse/upsert counters. Both flow into the final summary log AND into
