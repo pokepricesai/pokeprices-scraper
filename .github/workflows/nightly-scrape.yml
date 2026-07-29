@@ -89,6 +89,27 @@ jobs:
       - name: Run batch 6
         run: python pokeprices_scraper_v8.py --sets-file batches/batch6.txt
 
+  # —— Block 5A-W-48B: Japanese sets, isolated batch ————————————————————
+  # Kept separate from the English batches so language segregation is
+  # explicit at the workflow level. New Japanese sets get added to
+  # batches/batch-japanese-1.txt (or batch-japanese-2.txt etc. as the
+  # catalogue grows). English batches are never mixed with Japanese
+  # rows, and vice versa — this makes the workflow diff for adding a
+  # new Japanese set trivial and prevents accidental cross-language
+  # bundling.
+  batch-japanese-1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+      - name: Run Japanese batch 1
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-1.txt
+
   # —— eBay API scraper (runs in parallel with batches) ———————————————
   ebay-scrape:
     runs-on: ubuntu-latest
@@ -111,7 +132,7 @@ jobs:
   # —— Refresh card_trends + compute analytics ———————————————————————
   refresh-and-analytics:
     runs-on: ubuntu-latest
-    needs: [batch1, batch2, batch3, batch4, batch5, batch6]
+    needs: [batch1, batch2, batch3, batch4, batch5, batch6, batch-japanese-1]
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4

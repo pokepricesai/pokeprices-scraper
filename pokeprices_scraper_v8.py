@@ -125,7 +125,23 @@ def load_sets_from_file(sets_file):
 
 
 def load_cards_from_pc_csvs(csv_folder, set_filter=None, sets_filter=None):
+    """Load rows from every CSV in `csv_folder`, filtered against either
+    a single `set_filter` string or a `sets_filter` allowlist.
+
+    W48B additions:
+      * Aggregates the distinct console-names that produce output so we
+        can print a summary at the end (visibility for Luke, and a
+        forensic hook if an unexpected set ever slips through the
+        batch file).
+      * Emits a WARN (not a hard block) any time a card is loaded from
+        a console-name that contains 'japan'. The scraper itself does
+        not care about language — the `cards.language` column is set
+        by seed_set_cards.py — but the warning ensures Luke gets a
+        heads-up if a Japanese CSV was placed in pc_csvs/ before the
+        matching cards.language='jp' seed was run.
+    """
     cards = []
+    per_console_counts: dict[str, int] = {}
 
     if not os.path.exists(csv_folder):
         print(f"ERROR: Folder '{csv_folder}' not found")
@@ -164,8 +180,27 @@ def load_cards_from_pc_csvs(csv_folder, set_filter=None, sets_filter=None):
                     "card_slug": f"pc-{pc_id}",
                     "url": url,
                 })
+                per_console_counts[console_name] = per_console_counts.get(console_name, 0) + 1
 
     print(f"Loaded {len(cards)} cards")
+
+    # W48B — visibility gate. Print the console-name breakdown and warn
+    # on anything that looks Japanese. This block never blocks the run;
+    # its purpose is to surface accidental Japanese CSV drop-ins.
+    if per_console_counts:
+        print("Console-name distribution in this run:")
+        for console_name, n in sorted(per_console_counts.items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>6}  {console_name!r}")
+        japanese_consoles = [c for c in per_console_counts if "japan" in c.lower()]
+        if japanese_consoles:
+            print("")
+            print("  WARN: Japanese-labelled console-name(s) detected:")
+            for c in japanese_consoles:
+                print(f"    {c!r} ({per_console_counts[c]} rows)")
+            print("  These will be scraped into daily_prices normally.")
+            print("  Ensure seed_set_cards.py was run with --language jp for the")
+            print("  matching set_name so cards.language='jp' is set — otherwise")
+            print("  the site will render these prices under an English row.")
     return cards
 
 
@@ -180,7 +215,11 @@ def build_url(console_name, product_name):
     slug = product_name.lower()
     slug = slug.replace("[", "").replace("]", "")
     slug = slug.replace("#", "")
-    slug = re.sub(r"[^a-z0-9\s&]", '', slug)
+    # Block 5A-W-48B — preserve apostrophes; PriceCharting keeps them in
+    # slugs like "hop's-bag-91". Stripping the apostrophe returns a
+    # 302 redirect which the scraper counts as "not found". Verified
+    # against the live JP Battle Partners set on 2026-07-29.
+    slug = re.sub(r"[^a-z0-9\s&']", '', slug)
     slug = slug.strip()
     slug = re.sub(r'\s+', '-', slug)
     slug = re.sub(r'-+', '-', slug)

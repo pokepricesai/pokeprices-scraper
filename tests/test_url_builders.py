@@ -1,0 +1,137 @@
+"""
+tests/test_url_builders.py
+==========================
+Block 5A-W-48B — regression tests for the PriceCharting URL builder
+in pokeprices_scraper_v8.py and the site-route slug builder in
+seed_set_cards.py.
+
+The bug this file exists to prevent: the scraper's `build_url` used to
+strip apostrophes, which caused every card whose name contains an
+apostrophe (Hop's Bag, Lillie's Clefairy ex, N's Zoroark ex, and so on)
+to receive a 302 redirect from PriceCharting and be counted as
+"not found". The Japanese Battle Partners pilot import surfaced 71
+such cards on the first run.
+
+The fix preserved apostrophes in the scraper's URL builder while
+KEEPING them stripped in the seeder's site-route slug builder, because
+the site's own /set/.../card/... routes must remain apostrophe-free.
+Both invariants are pinned here.
+"""
+
+import importlib.util
+import os
+import sys
+import unittest
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load(module_name: str, filename: str):
+    """Import a module by absolute file path, avoiding a full package."""
+    path = os.path.join(REPO_ROOT, filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestScraperUrlBuilder(unittest.TestCase):
+    """pokeprices_scraper_v8.build_url — PC product-page URL."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.v8 = _load("v8", "pokeprices_scraper_v8.py")
+
+    def test_apostrophe_preserved_in_pc_url(self):
+        # The three apostrophe cases from the Battle Partners pilot.
+        url = self.v8.build_url("Pokemon Japanese Battle Partners", "Hop's Bag #91")
+        self.assertIn("hop's-bag-91", url)
+        self.assertTrue(url.startswith("https://www.pricecharting.com/game/pokemon-japanese-battle-partners/"))
+
+        url = self.v8.build_url("Pokemon Japanese Battle Partners", "Lillie's Clefairy ex #126")
+        self.assertIn("lillie's-clefairy-ex-126", url)
+
+        url = self.v8.build_url("Pokemon Japanese Battle Partners", "N's Zoroark ex #131")
+        self.assertIn("n's-zoroark-ex-131", url)
+
+    def test_ordinary_card_without_punctuation_unchanged(self):
+        url = self.v8.build_url("Pokemon Base Set", "Pikachu #58")
+        # No apostrophe means the slug is bytewise identical to what
+        # the scraper produced before the fix.
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-base-set/pikachu-58",
+        )
+
+    def test_english_card_with_bracket_variant(self):
+        # English card with a `[…]` bracket variant — the fix
+        # regex still strips brackets and preserves apostrophes.
+        url = self.v8.build_url("Pokemon Base Set", "Charizard [1st Edition] #4")
+        self.assertIn("charizard-1st-edition-4", url)
+        # Bracket must be gone from the URL.
+        self.assertNotIn("[", url)
+        self.assertNotIn("]", url)
+
+    def test_hash_symbol_stripped(self):
+        # `#` must never enter the URL — Postgres CGI would break.
+        url = self.v8.build_url("Pokemon Base Set", "Pikachu #58")
+        self.assertNotIn("#", url)
+
+    def test_ampersand_preserved_for_sets_and_names(self):
+        # The scraper preserves `&` because PriceCharting keeps it in
+        # both console slugs and product names (e.g. Team Magma & Aqua).
+        # We just want to make sure the fix didn't accidentally strip it.
+        url = self.v8.build_url("Pokemon Team Magma & Team Aqua", "Blaziken #63")
+        self.assertIn("&", url)
+
+    def test_lowercased(self):
+        # Regression pin: full URL is lowercase, matching PC's canonical form.
+        url = self.v8.build_url("Pokemon Base Set", "CHARIZARD #4")
+        self.assertEqual(url, url.lower())
+
+
+class TestSeederSiteSlug(unittest.TestCase):
+    """seed_set_cards.build_card_url_slug — website /card/<slug> route.
+
+    The invariants here are opposite to the scraper: apostrophes MUST be
+    stripped from the site's own URL slugs because the /set/.../card/...
+    routes are consumed by Next.js and must round-trip through
+    encodeURIComponent cleanly. Apostrophes in URLs also complicate
+    sharing links.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.seeder = _load("seeder", "seed_set_cards.py")
+
+    def test_apostrophe_stripped_in_site_slug(self):
+        slug = self.seeder.build_card_url_slug("Hop's Bag #91")
+        self.assertEqual(slug, "hops-bag-91")
+        self.assertNotIn("'", slug)
+
+        slug = self.seeder.build_card_url_slug("Lillie's Clefairy ex #126")
+        self.assertEqual(slug, "lillies-clefairy-ex-126")
+        self.assertNotIn("'", slug)
+
+        slug = self.seeder.build_card_url_slug("N's Zoroark ex #131")
+        self.assertEqual(slug, "ns-zoroark-ex-131")
+        self.assertNotIn("'", slug)
+
+    def test_ordinary_card_slug_unchanged(self):
+        slug = self.seeder.build_card_url_slug("Pikachu #58")
+        self.assertEqual(slug, "pikachu-58")
+
+    def test_bracket_variant_stripped(self):
+        slug = self.seeder.build_card_url_slug("Charizard [1st Edition] #4")
+        self.assertEqual(slug, "charizard-1st-edition-4")
+
+    def test_multiple_apostrophes(self):
+        # Belt and braces: two apostrophes both stripped.
+        slug = self.seeder.build_card_url_slug("Iono's Bellibolt's Twin")
+        self.assertEqual(slug, "ionos-bellibolts-twin")
+        self.assertNotIn("'", slug)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
