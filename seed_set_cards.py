@@ -119,14 +119,13 @@ def row_to_card(row, set_name, release_date, printed_total, language):
     card_number = extract_card_number(product_name)
     is_sealed = card_number is None
 
-    return {
+    row_out = {
         "card_slug": pc_id,
         "card_name": product_name,
         "set_name": set_name,
         "card_number": card_number,
         "card_number_display": f"{card_number}/{printed_total}" if card_number and printed_total else None,
         "set_printed_total": str(printed_total) if printed_total else None,
-        "set_release_date": release_date,
         "is_sealed": is_sealed,
         "card_url_slug": build_card_url_slug(product_name),
         "pc_url": build_pc_url(console_name, product_name),
@@ -135,6 +134,13 @@ def row_to_card(row, set_name, release_date, printed_total, language):
         "language": language,
         # pc_slug is a generated column in the DB — don't insert it
     }
+    # W48D — set_release_date is optional; only include it when caller
+    # provides a date. PostgREST tolerates a missing key on insert
+    # (column stays NULL) but silently overwrites a real value if the
+    # key is present with None. So we conditionally attach it.
+    if release_date:
+        row_out["set_release_date"] = release_date
+    return row_out
 
 
 def fetch_existing_card_slugs(set_name):
@@ -161,6 +167,110 @@ def fetch_existing_card_slugs(set_name):
             break
         offset += page
     return slugs
+
+
+def fetch_existing_cards_by_slug(slugs):
+    """Block 5A-W-48D-FIX1 — fetch every existing cards row for any of
+    the given card_slugs, REGARDLESS of set_name. Used by the language-
+    collision guard to detect a cross-set PC-ID collision (e.g. a
+    Japanese CSV whose card_slug already exists as an English row in a
+    different set). Returns {card_slug: {'card_slug','card_name',
+    'set_name','language'}}."""
+    out = {}
+    slug_list = sorted(slugs)
+    chunk = 200
+    for i in range(0, len(slug_list), chunk):
+        ids = slug_list[i:i + chunk]
+        in_list = ",".join([f'"{s}"' for s in ids])
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/cards?card_slug=in.({in_list})"
+            f"&select=card_slug,card_name,set_name,language",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            timeout=45,
+        )
+        if r.status_code == 200:
+            for row in r.json():
+                out[row["card_slug"]] = row
+        else:
+            print(f"  WARN: cross-slug fetch failed at chunk {i}: {r.status_code}")
+    return out
+
+
+def classify_language_collisions(csv_cards, existing_by_slug, target_language, allow_reclass):
+    """Block 5A-W-48D-FIX1 — pure classifier. Splits the CSV rows into
+    three buckets based on existing DB state and the caller's allow-list:
+
+      * `safe`: no existing row, OR existing row's language matches
+        target_language. Free to upsert.
+      * `allowed_reclass`: existing row's language differs from
+        target_language AND the card_slug is in `allow_reclass`. May be
+        upserted after explicit human authorisation.
+      * `blocked`: existing row's language differs and the card_slug
+        is NOT in `allow_reclass`. Must NEVER be upserted — the caller
+        is expected to abort the batch (or drop these rows) rather than
+        silently reclassify.
+
+    Returns (safe, allowed_reclass, blocked) — each a list of dicts.
+    `allowed_reclass` and `blocked` items are enriched with an
+    '_existing' key containing the pre-existing row for reporting.
+
+    Pure: no I/O, no globals, no mutation of inputs. Suitable for
+    unit testing against a fake `existing_by_slug` mapping."""
+    allow_set = set(allow_reclass or ())
+    safe, allowed_bucket, blocked = [], [], []
+    for card in csv_cards:
+        slug = card["card_slug"]
+        existing = existing_by_slug.get(slug)
+        if not existing or existing.get("language") == target_language:
+            safe.append(card)
+            continue
+        enriched = dict(card)
+        enriched["_existing"] = existing
+        if slug in allow_set:
+            allowed_bucket.append(enriched)
+        else:
+            blocked.append(enriched)
+    return safe, allowed_bucket, blocked
+
+
+def format_collision_report(blocked, allowed_reclass, target_language):
+    """Build the human-readable collision report. Kept separate from
+    classify_language_collisions so tests can exercise both."""
+    lines = []
+    if blocked:
+        lines.append(
+            f"\nLANGUAGE COLLISION — {len(blocked)} row(s) blocked "
+            f"(target language={target_language!r}):"
+        )
+        for card in blocked:
+            ex = card["_existing"]
+            lines.append(f"  pc-{card['card_slug']}:")
+            lines.append(
+                f"    EXISTING: language={ex.get('language')!r}, "
+                f"set={ex.get('set_name')!r}, name={ex.get('card_name')!r}"
+            )
+            lines.append(
+                f"    PROPOSED: language={target_language!r}, "
+                f"set={card.get('set_name')!r}, name={card.get('card_name')!r}"
+            )
+        allow_flag = " ".join(sorted({c["card_slug"] for c in blocked}))
+        lines.append(
+            "\nRefusing to silently reclassify. To allow specific PC IDs, "
+            "re-run with:\n"
+            f"  --allow-language-reclassification {allow_flag}"
+        )
+    if allowed_reclass:
+        lines.append(
+            f"\nExplicit reclassification approved for {len(allowed_reclass)} row(s):"
+        )
+        for card in allowed_reclass:
+            ex = card["_existing"]
+            lines.append(
+                f"  pc-{card['card_slug']}: language "
+                f"{ex.get('language')!r}->{target_language!r}, "
+                f"set {ex.get('set_name')!r}->{card.get('set_name')!r}"
+            )
+    return "\n".join(lines)
 
 
 def upsert_set_metadata(set_name, release_date, printed_total, language, dry_run=False):
@@ -226,7 +336,11 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--csv", required=True, help="Path to PriceCharting CSV")
     p.add_argument("--set-name", required=True, help='DB set_name (no "Pokemon " prefix)')
-    p.add_argument("--release-date", required=True, help="YYYY-MM-DD")
+    p.add_argument("--release-date", default=None,
+                   help="YYYY-MM-DD. Optional as of W48D — omit for sets whose "
+                        "release date is unverifiable. When omitted, "
+                        "set_release_date + release_year are left null on the "
+                        "seeded rows.")
     p.add_argument("--printed-total", type=int, default=None,
                    help="e.g. 83. Omit for sets without a fixed total (promos).")
     p.add_argument("--language", choices=list(ALLOWED_LANGUAGES), default="en",
@@ -239,6 +353,16 @@ def main():
                         "flowing into the wrong set. Recommended for Japanese imports.")
     p.add_argument("--insert-only", action="store_true",
                    help="Skip rows whose card_slug already exists; never UPDATE.")
+    p.add_argument("--allow-language-reclassification", nargs="+", default=[],
+                   metavar="PC_ID",
+                   help="Block 5A-W-48D-FIX1 — explicit override for the "
+                        "language-collision guard. Naming a PC ID here "
+                        "authorises the seeder to change that ONE existing "
+                        "row's language to the current --language value. "
+                        "Any collision NOT named in this list still aborts "
+                        "the batch. Deliberately narrow: no broad --force "
+                        "flag that would allow silent language reclassification "
+                        "across an entire file.")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
@@ -300,6 +424,32 @@ def main():
     if args.insert_only:
         cards = [c for c in cards if c["card_slug"] in new_slugs]
         print(f"\n--insert-only: will attempt {len(cards)} new rows.")
+
+    # ── Block 5A-W-48D-FIX1 — language-collision guard ─────────────
+    # Fetch every existing cards row that matches any card_slug we are
+    # about to write, regardless of set_name. Split into safe / allowed
+    # / blocked. Anything BLOCKED aborts the seed for this file. Blocks
+    # are the exact protection that would have caught the two W48D
+    # en->jp flips (pc-8330138 and pc-8076785) at seed time.
+    csv_slug_set = {c["card_slug"] for c in cards}
+    existing_full = fetch_existing_cards_by_slug(csv_slug_set) if csv_slug_set else {}
+    safe, allowed_reclass, blocked = classify_language_collisions(
+        cards, existing_full, args.language,
+        args.allow_language_reclassification,
+    )
+    if blocked or allowed_reclass:
+        print(format_collision_report(blocked, allowed_reclass, args.language))
+    if blocked and not args.dry_run:
+        print(f"\nAborting seed for {args.csv}: {len(blocked)} language collision(s). "
+              "No rows written for this file.")
+        sys.exit(3)
+    if blocked and args.dry_run:
+        print(f"\nDRY-RUN: {len(blocked)} language collision(s) would block a real run.")
+    # Only the safe rows and the explicitly-allowed reclassifications
+    # continue past this point.
+    cards = safe + allowed_reclass
+    for card in cards:
+        card.pop("_existing", None)
 
     if cards:
         print("\nSample rows to write:")

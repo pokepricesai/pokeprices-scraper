@@ -215,8 +215,17 @@ def load_cards_from_pc_csvs(csv_folder, set_filter=None, sets_filter=None, pc_id
 # ============================================
 
 def build_url(console_name, product_name):
-    console_slug = console_name.lower().replace(" ", "-")
-    console_slug = console_slug.replace("&", "&")
+    # Block 5A-W-48D — the console slug used to just lowercase + swap
+    # spaces for dashes, which failed on set names containing commas
+    # (e.g. "Pokemon Japanese Gold, Silver, New World"). PC drops the
+    # comma entirely and collapses the resulting double-dash to one.
+    # Colons and apostrophes are kept — both verified live against PC
+    # for "Pokemon Japanese Magma VS Aqua: Two Ambitions" and
+    # "Pokemon Japanese 2002 McDonald's".
+    console_slug = console_name.lower()
+    console_slug = console_slug.replace(",", "")
+    console_slug = console_slug.replace(" ", "-")
+    console_slug = re.sub(r"-+", "-", console_slug)
 
     slug = product_name.lower()
     slug = slug.replace("[", "").replace("]", "")
@@ -225,7 +234,12 @@ def build_url(console_name, product_name):
     # slugs like "hop's-bag-91". Stripping the apostrophe returns a
     # 302 redirect which the scraper counts as "not found". Verified
     # against the live JP Battle Partners set on 2026-07-29.
-    slug = re.sub(r"[^a-z0-9\s&']", '', slug)
+    # Block 5A-W-48D-FIX1 — also preserve hyphens in the card slug.
+    # Names like "Jangmo-o #69", "3-Pack Blister", "Professor Sycamore
+    # #XY-P" produce 302 search-page redirects when the internal hyphen
+    # is stripped ("jangmoo-69" instead of "jangmo-o-69"). Verified live
+    # against 4 JP cards on 2026-07-31.
+    slug = re.sub(r"[^a-z0-9\s&'\-]", '', slug)
     slug = slug.strip()
     slug = re.sub(r'\s+', '-', slug)
     slug = re.sub(r'-+', '-', slug)

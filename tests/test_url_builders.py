@@ -90,6 +90,85 @@ class TestScraperUrlBuilder(unittest.TestCase):
         url = self.v8.build_url("Pokemon Base Set", "CHARIZARD #4")
         self.assertEqual(url, url.lower())
 
+    def test_console_comma_dropped(self):
+        # Block 5A-W-48D — three Japanese sets have commas in their
+        # console-name. PC drops the comma and collapses the
+        # resulting double-dash. Verified live against PC.
+        url = self.v8.build_url("Pokemon Japanese Darkness, and to Light", "Chansey")
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-darkness-and-to-light/chansey",
+        )
+        self.assertNotIn(",", url)
+        self.assertNotIn("--", url)
+
+        url = self.v8.build_url("Pokemon Japanese Gold, Silver, New World", "Aipom #190")
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-gold-silver-new-world/aipom-190",
+        )
+
+        url = self.v8.build_url("Pokemon Japanese Golden Sky, Silvery Ocean", "Aipom #82")
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-golden-sky-silvery-ocean/aipom-82",
+        )
+
+    def test_console_colon_preserved(self):
+        # Block 5A-W-48D — "Pokemon Japanese Magma VS Aqua: Two Ambitions"
+        # keeps its colon in the URL slug. Verified live against PC.
+        url = self.v8.build_url(
+            "Pokemon Japanese Magma VS Aqua: Two Ambitions",
+            "Aerodactyl ex #55",
+        )
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-magma-vs-aqua:-two-ambitions/aerodactyl-ex-55",
+        )
+        self.assertIn(":", url)
+
+    def test_console_apostrophe_preserved(self):
+        # Block 5A-W-48D — apostrophes in the CONSOLE slug behave the
+        # same as in card slugs: PC preserves them. Verified live for
+        # "Pokemon Japanese 2002 McDonald's".
+        url = self.v8.build_url("Pokemon Japanese 2002 McDonald's", "Bulbasaur #1")
+        self.assertIn("mcdonald's", url)
+
+    def test_card_slug_hyphen_preserved(self):
+        # Block 5A-W-48D-FIX1 — hyphens INSIDE a card name must be
+        # preserved. Verified live against PC:
+        #   * "Jangmo-o #69"                -> jangmo-o-69
+        #   * "3-Pack Blister"              -> 3-pack-blister
+        #   * "Professor Sycamore [Event Organizer] #XY-P"
+        #                                   -> professor-sycamore-event-organizer-xy-p
+        url = self.v8.build_url("Pokemon Japanese Alter Genesis", "Jangmo-o #69")
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-alter-genesis/jangmo-o-69",
+        )
+        url = self.v8.build_url("Pokemon Japanese 20th Anniversary", "3-Pack Blister")
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-20th-anniversary/3-pack-blister",
+        )
+        url = self.v8.build_url("Pokemon Japanese Promo",
+                                "Professor Sycamore [Event Organizer] #XY-P")
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-promo/"
+            "professor-sycamore-event-organizer-xy-p",
+        )
+
+    def test_card_slug_slash_stripped_but_hyphen_kept(self):
+        # Block 5A-W-48D-FIX1 — "#79/XY-P" needs the slash dropped and
+        # the hyphen kept. Verified live against PC:
+        #   * "M Gengar EX #79/XY-P" -> m-gengar-ex-79xy-p
+        url = self.v8.build_url("Pokemon Japanese Promo", "M Gengar EX #79/XY-P")
+        self.assertEqual(
+            url,
+            "https://www.pricecharting.com/game/pokemon-japanese-promo/m-gengar-ex-79xy-p",
+        )
+
 
 class TestFetcherRetry(unittest.TestCase):
     """Block 5A-W-48C-FIX1 — fetch_card_page retries on transient
@@ -190,6 +269,127 @@ class TestFetcherRetry(unittest.TestCase):
             self.assertIsNone(html)
         finally:
             self.v8.session = original
+
+
+class TestSeederLanguageCollisionGuard(unittest.TestCase):
+    """Block 5A-W-48D-FIX1 — the language-collision guard prevents the
+    seeder from silently reclassifying an existing card from one
+    language to another via a card_slug (PC ID) match. Any collision
+    aborts the batch unless the specific PC ID has been named in
+    --allow-language-reclassification.
+
+    These are the exact tests that would have caught the two W48D en->jp
+    flips (pc-8330138 and pc-8076785) at seed time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.seeder = _load("seeder", "seed_set_cards.py")
+
+    def _card(self, slug, name="Any Card #1", set_name="Any Set"):
+        return {"card_slug": slug, "card_name": name, "set_name": set_name}
+
+    def _existing(self, slug, language, set_name="Prior Set", name="Prior Card"):
+        return {slug: {"card_slug": slug, "card_name": name,
+                       "set_name": set_name, "language": language}}
+
+    def test_en_to_jp_collision_is_blocked(self):
+        csv_cards = [self._card("1001", set_name="Japanese Promo")]
+        existing = self._existing("1001", "en", set_name="Promo")
+        safe, allowed, blocked = self.seeder.classify_language_collisions(
+            csv_cards, existing, target_language="jp", allow_reclass=[])
+        self.assertEqual(safe, [])
+        self.assertEqual(allowed, [])
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["card_slug"], "1001")
+        self.assertEqual(blocked[0]["_existing"]["language"], "en")
+
+    def test_jp_to_en_collision_is_blocked(self):
+        csv_cards = [self._card("2002", set_name="English Reprint")]
+        existing = self._existing("2002", "jp", set_name="Japanese Promo")
+        safe, allowed, blocked = self.seeder.classify_language_collisions(
+            csv_cards, existing, target_language="en", allow_reclass=[])
+        self.assertEqual(safe, [])
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["_existing"]["language"], "jp")
+
+    def test_same_language_is_never_a_collision(self):
+        csv_cards = [self._card("3003", set_name="Battle Partners")]
+        existing = self._existing("3003", "jp", set_name="Battle Partners")
+        safe, allowed, blocked = self.seeder.classify_language_collisions(
+            csv_cards, existing, target_language="jp", allow_reclass=[])
+        self.assertEqual(len(safe), 1)
+        self.assertEqual(safe[0]["card_slug"], "3003")
+        self.assertEqual(blocked, [])
+        self.assertEqual(allowed, [])
+
+    def test_no_existing_row_is_never_a_collision(self):
+        csv_cards = [self._card("4004")]
+        safe, allowed, blocked = self.seeder.classify_language_collisions(
+            csv_cards, {}, target_language="jp", allow_reclass=[])
+        self.assertEqual(len(safe), 1)
+        self.assertEqual(blocked, [])
+        self.assertEqual(allowed, [])
+
+    def test_only_named_pc_id_is_reclassified(self):
+        # Two collisions; only ONE is named in the allow-list. The other
+        # must still be blocked.
+        csv_cards = [self._card("5005"), self._card("5006")]
+        existing = {
+            "5005": {"card_slug": "5005", "card_name": "A #1", "set_name": "Old", "language": "en"},
+            "5006": {"card_slug": "5006", "card_name": "B #1", "set_name": "Old", "language": "en"},
+        }
+        safe, allowed, blocked = self.seeder.classify_language_collisions(
+            csv_cards, existing, target_language="jp", allow_reclass=["5005"])
+        self.assertEqual(safe, [])
+        self.assertEqual(len(allowed), 1)
+        self.assertEqual(allowed[0]["card_slug"], "5005")
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["card_slug"], "5006")
+
+    def test_broad_allow_does_not_bypass_unrelated_ids(self):
+        # Naming an unrelated PC ID in the allow-list must NOT let a
+        # different colliding PC ID slip through.
+        csv_cards = [self._card("7777")]
+        existing = self._existing("7777", "en")
+        safe, allowed, blocked = self.seeder.classify_language_collisions(
+            csv_cards, existing, target_language="jp",
+            allow_reclass=["9999", "8888"])
+        self.assertEqual(safe, [])
+        self.assertEqual(allowed, [])
+        self.assertEqual(len(blocked), 1)
+
+    def test_report_contains_both_existing_and_proposed_identities(self):
+        csv_cards = [self._card("6006", name="Raifort #117/SV-P", set_name="Japanese Promo")]
+        existing = {
+            "6006": {"card_slug": "6006", "card_name": "OldName #117",
+                     "set_name": "Legacy Promos", "language": "en"},
+        }
+        _, _, blocked = self.seeder.classify_language_collisions(
+            csv_cards, existing, target_language="jp", allow_reclass=[])
+        report = self.seeder.format_collision_report(blocked, [], target_language="jp")
+        # Both sides of the collision must appear in the report.
+        self.assertIn("pc-6006", report)
+        self.assertIn("'en'", report)
+        self.assertIn("'jp'", report)
+        self.assertIn("Legacy Promos", report)
+        self.assertIn("Japanese Promo", report)
+        self.assertIn("Raifort #117/SV-P", report)
+        self.assertIn("OldName #117", report)
+        # And the report must instruct HOW to authorise the override.
+        self.assertIn("--allow-language-reclassification", report)
+        self.assertIn("6006", report)
+
+    def test_allowed_reclassification_reported_distinctly(self):
+        # When an override is honoured, the report must clearly say so.
+        csv_cards = [self._card("8080", name="X #1", set_name="Japanese Wild Blaze")]
+        existing = {"8080": {"card_slug": "8080", "card_name": "X #1",
+                             "set_name": "Wild Blaze EN", "language": "en"}}
+        _, allowed, _ = self.seeder.classify_language_collisions(
+            csv_cards, existing, target_language="jp", allow_reclass=["8080"])
+        report = self.seeder.format_collision_report([], allowed, target_language="jp")
+        self.assertIn("Explicit reclassification approved", report)
+        self.assertIn("pc-8080", report)
+        self.assertIn("'en'->'jp'", report)
 
 
 class TestSeederSiteSlug(unittest.TestCase):
