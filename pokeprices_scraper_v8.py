@@ -124,9 +124,10 @@ def load_sets_from_file(sets_file):
     return sets
 
 
-def load_cards_from_pc_csvs(csv_folder, set_filter=None, sets_filter=None):
+def load_cards_from_pc_csvs(csv_folder, set_filter=None, sets_filter=None, pc_ids_filter=None):
     """Load rows from every CSV in `csv_folder`, filtered against either
-    a single `set_filter` string or a `sets_filter` allowlist.
+    a single `set_filter` string, a `sets_filter` allowlist, and/or a
+    `pc_ids_filter` set of PriceCharting product IDs.
 
     W48B additions:
       * Aggregates the distinct console-names that produce output so we
@@ -169,6 +170,11 @@ def load_cards_from_pc_csvs(csv_folder, set_filter=None, sets_filter=None):
                 if set_filter and console_name != set_filter:
                     continue
                 if sets_filter and console_name not in sets_filter:
+                    continue
+                # Block 5A-W-48C-FIX1 — targeted re-scrape support.
+                # When --pc-ids <file> is supplied, only PC IDs listed
+                # in that file are loaded. Everything else is skipped.
+                if pc_ids_filter is not None and pc_id not in pc_ids_filter:
                     continue
 
                 url = build_url(console_name, product_name)
@@ -534,21 +540,51 @@ def upsert_card_volume(card_slug, sales_30d, volume_text=None, grade='Ungraded')
         return False
 
 
-def fetch_card_page(url):
-    try:
-        resp = session.get(url, timeout=10)
-        if resp.status_code == 404:
-            return None
-        if resp.status_code != 200:
+def fetch_card_page(url, retries=2, backoff_seconds=1.5):
+    """Fetch a PriceCharting product page with bounded retry.
+
+    Block 5A-W-48C-FIX1 — the initial JP-batch run reported ~4% of
+    products as "not found". Post-mortem probing showed most of those
+    pages DO exist and have prices on subsequent fetches — they were
+    lost to transient network hiccups or PriceCharting throttling.
+    Adding a bounded retry with a short exponential-ish backoff
+    recovers those without changing the URL-builder contract.
+
+    Retries fire on:
+      * requests.RequestException (connection reset, timeout)
+      * HTTP 429 (too many requests)
+      * HTTP 5xx (server side)
+    Retries do NOT fire on HTTP 404 — that's a real "no such page"
+    and the caller treats it as unresolved.
+    """
+    last_err: str | None = None
+    for attempt in range(retries + 1):  # 1 initial + N retries
+        try:
+            resp = session.get(url, timeout=10)
+            if resp.status_code == 404:
+                return None
+            if resp.status_code == 200:
+                return resp.text
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
+                last_err = f"HTTP {resp.status_code} retry"
+                time.sleep(backoff_seconds * (attempt + 1))
+                continue
             print(f"  HTTP {resp.status_code}")
             return None
-        return resp.text
-    except requests.exceptions.Timeout:
-        print(f"  Timeout")
-        return None
-    except Exception as e:
-        print(f"  Error: {e}")
-        return None
+        except requests.exceptions.Timeout:
+            last_err = "Timeout"
+        except requests.exceptions.RequestException as e:
+            last_err = f"NetErr: {str(e)[:60]}"
+        except Exception as e:
+            print(f"  Error: {e}")
+            return None
+        # Retry if we didn't succeed and have attempts left
+        if attempt < retries:
+            time.sleep(backoff_seconds * (attempt + 1))
+        else:
+            print(f"  {last_err} (gave up after {retries + 1} attempts)")
+            return None
+    return None
 
 
 # ============================================
@@ -572,7 +608,22 @@ def main():
         if idx + 1 < len(sys.argv):
             sets_filter = load_sets_from_file(sys.argv[idx + 1])
 
-    cards = load_cards_from_pc_csvs(PC_CSV_FOLDER, set_filter=set_filter, sets_filter=sets_filter)
+    # Block 5A-W-48C-FIX1 — targeted --pc-ids <file> re-scrape.
+    # File has one PriceCharting product ID per line. Any row whose
+    # `id` column is not in the file is skipped.
+    pc_ids_filter = None
+    if "--pc-ids" in sys.argv:
+        idx = sys.argv.index("--pc-ids")
+        if idx + 1 < len(sys.argv):
+            with open(sys.argv[idx + 1], "r") as f:
+                pc_ids_filter = {line.strip() for line in f if line.strip()}
+            print(f"Loaded {len(pc_ids_filter)} PC IDs from {sys.argv[idx + 1]}")
+
+    cards = load_cards_from_pc_csvs(
+        PC_CSV_FOLDER,
+        set_filter=set_filter, sets_filter=sets_filter,
+        pc_ids_filter=pc_ids_filter,
+    )
 
     if not cards:
         print("No cards found. Check your CSV files and set filter.")
