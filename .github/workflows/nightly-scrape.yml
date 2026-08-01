@@ -93,9 +93,11 @@ jobs:
   # Kept separate from the English batches so language segregation is
   # explicit at the workflow level. English batches are never mixed
   # with Japanese rows, and vice versa. Block 5A-W-48D — 127 JP sets
-  # (11 pilot + 116 W48D imports) are greedy-bin-packed into four
-  # balanced batches of ~5,830 rows each, matching the English batch
-  # sizes. Regenerate via `python generate_batches.py --language jp`.
+  # (11 pilot + 116 W48D imports) are greedy-bin-packed into balanced
+  # batches. W48D-DEPLOY rebalanced from 4 to 5 batches (~4,668 rows
+  # each) after the first run showed batch-japanese-3 hitting the 5h
+  # job timeout. Regenerate via
+  # `python generate_batches.py --language jp --jp-batches 5`.
   batch-japanese-1:
     runs-on: ubuntu-latest
     timeout-minutes: 300
@@ -148,6 +150,24 @@ jobs:
       - name: Run Japanese batch 4
         run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-4.txt
 
+  # Block 5A-W-48D-DEPLOY — rebalance from 4 to 5 JP batches after the
+  # first full nightly run showed batch-japanese-3 hitting the 5h job
+  # timeout at ~3.3 s/row (94 % of the way through). Splitting into 5
+  # bins gives ~4,668 rows/batch, which stays under 5h even at the
+  # worst-case per-row rate observed.
+  batch-japanese-5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+      - name: Run Japanese batch 5
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-5.txt
+
   # —— eBay API scraper (runs in parallel with batches) ———————————————
   ebay-scrape:
     runs-on: ubuntu-latest
@@ -170,7 +190,7 @@ jobs:
   # —— Refresh card_trends + compute analytics ———————————————————————
   refresh-and-analytics:
     runs-on: ubuntu-latest
-    needs: [batch1, batch2, batch3, batch4, batch5, batch6, batch-japanese-1, batch-japanese-2, batch-japanese-3, batch-japanese-4]
+    needs: [batch1, batch2, batch3, batch4, batch5, batch6, batch-japanese-1, batch-japanese-2, batch-japanese-3, batch-japanese-4, batch-japanese-5]
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
