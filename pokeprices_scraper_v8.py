@@ -633,6 +633,20 @@ def main():
                 pc_ids_filter = {line.strip() for line in f if line.strip()}
             print(f"Loaded {len(pc_ids_filter)} PC IDs from {sys.argv[idx + 1]}")
 
+    # Block 5A-W-49 — cadence filter. `--cadence {daily,weekly,all}`
+    # splits the schedule into a high-value daily run and a low-value
+    # weekly run. Default is `all` so that ad-hoc targeted invocations
+    # (via --set / --sets-file / --pc-ids) never silently omit a
+    # requested card.
+    cadence = "all"
+    if "--cadence" in sys.argv:
+        idx = sys.argv.index("--cadence")
+        if idx + 1 < len(sys.argv):
+            cadence = sys.argv[idx + 1]
+        if cadence not in ("daily", "weekly", "all"):
+            print(f"ERROR: --cadence must be one of daily|weekly|all (got {cadence!r})")
+            sys.exit(1)
+
     cards = load_cards_from_pc_csvs(
         PC_CSV_FOLDER,
         set_filter=set_filter, sets_filter=sets_filter,
@@ -642,6 +656,25 @@ def main():
     if not cards:
         print("No cards found. Check your CSV files and set filter.")
         sys.exit(1)
+
+    # Block 5A-W-49 — apply cadence filter after CSV load. `all` is a
+    # no-op. `daily` / `weekly` bulk-load classification state once and
+    # filter locally so we never issue one DB query per card.
+    if cadence in ("daily", "weekly"):
+        try:
+            import cadence as _cadence
+            state = _cadence.load_state_from_supabase(SUPABASE_URL, SUPABASE_KEY)
+            before = len(cards)
+            cards, hist = _cadence.filter_cards_by_cadence(cards, cadence, state)
+            print(f"\n[cadence={cadence}] filtered {before} → {len(cards)} cards")
+            for c, n in hist.items():
+                print(f"  {c.value:<18} : {n}")
+        except Exception as e:
+            print(f"ERROR: cadence filter failed: {e}. Aborting to avoid partial coverage.")
+            sys.exit(1)
+        if not cards:
+            print("No cards remain after cadence filter. Nothing to do.")
+            sys.exit(0)
 
     if test_mode:
         cards = cards[:5]

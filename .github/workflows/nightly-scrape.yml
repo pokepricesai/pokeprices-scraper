@@ -4,10 +4,28 @@ on:
   schedule:
     - cron: '0 8 * * *'
   workflow_dispatch:
+    inputs:
+      cadence:
+        description: "Cadence override for this manual run (daily/weekly/all)"
+        required: false
+        default: "daily"
+        type: choice
+        options: [daily, weekly, all]
+
+# Block 5A-W-49 — shared concurrency group so a daily, weekly or
+# historical scrape run never overlaps another. `cancel-in-progress:
+# false` queues the newer run behind the older instead of interrupting
+# a multi-hour scrape halfway through.
+concurrency:
+  group: pokeprices-scrape
+  cancel-in-progress: false
 
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+  # Cadence used by every batch job below. Cron runs default to daily.
+  # workflow_dispatch inputs.cadence overrides for a manual run.
+  CADENCE: ${{ github.event.inputs.cadence || 'daily' }}
 
 jobs:
   # —— 6 parallel batch scrape jobs ——————————————————————————————————
@@ -22,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 1
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch1.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch1.txt --cadence $CADENCE
 
   batch2:
     runs-on: ubuntu-latest
@@ -35,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 2
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch2.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch2.txt --cadence $CADENCE
 
   batch3:
     runs-on: ubuntu-latest
@@ -48,7 +66,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 3
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch3.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch3.txt --cadence $CADENCE
 
   batch4:
     runs-on: ubuntu-latest
@@ -61,7 +79,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 4
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch4.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch4.txt --cadence $CADENCE
 
   batch5:
     runs-on: ubuntu-latest
@@ -74,7 +92,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 5
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch5.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch5.txt --cadence $CADENCE
 
   batch6:
     runs-on: ubuntu-latest
@@ -87,7 +105,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run batch 6
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch6.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch6.txt --cadence $CADENCE
 
   # —— Japanese sets, isolated batches ——————————————————————————————
   # Kept separate from the English batches so language segregation is
@@ -109,7 +127,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run Japanese batch 1
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-1.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-1.txt --cadence $CADENCE
 
   batch-japanese-2:
     runs-on: ubuntu-latest
@@ -122,7 +140,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run Japanese batch 2
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-2.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-2.txt --cadence $CADENCE
 
   batch-japanese-3:
     runs-on: ubuntu-latest
@@ -135,7 +153,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run Japanese batch 3
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-3.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-3.txt --cadence $CADENCE
 
   batch-japanese-4:
     runs-on: ubuntu-latest
@@ -148,7 +166,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run Japanese batch 4
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-4.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-4.txt --cadence $CADENCE
 
   # Block 5A-W-48D-DEPLOY — rebalance from 4 to 5 JP batches after the
   # first full nightly run showed batch-japanese-3 hitting the 5h job
@@ -166,7 +184,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
       - name: Run Japanese batch 5
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-5.txt
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch-japanese-5.txt --cadence $CADENCE
 
   # —— eBay API scraper (runs in parallel with batches) ———————————————
   ebay-scrape:
