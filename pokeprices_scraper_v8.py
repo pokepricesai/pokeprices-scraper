@@ -554,6 +554,20 @@ def upsert_card_volume(card_slug, sales_30d, volume_text=None, grade='Ungraded')
         return False
 
 
+# Block 5A-W-49-FIX2 — most-recent fetch outcome, populated by every
+# call to `fetch_card_page` before it returns. Callers that need to
+# categorise the attempt for `scrape_attempt_state` read this dict
+# immediately after the fetch. Kept module-level (not a return-tuple)
+# so the existing test suite and other callers see the unchanged
+# `str | None` return shape.
+LAST_FETCH_OUTCOME: dict = {"category": None, "http_status": None}
+
+
+def _set_outcome(category: str, http_status=None):
+    LAST_FETCH_OUTCOME["category"] = category
+    LAST_FETCH_OUTCOME["http_status"] = http_status
+
+
 def fetch_card_page(url, retries=2, backoff_seconds=1.5):
     """Fetch a PriceCharting product page with bounded retry.
 
@@ -570,20 +584,29 @@ def fetch_card_page(url, retries=2, backoff_seconds=1.5):
       * HTTP 5xx (server side)
     Retries do NOT fire on HTTP 404 — that's a real "no such page"
     and the caller treats it as unresolved.
+
+    Block 5A-W-49-FIX2 — every terminal path sets `LAST_FETCH_OUTCOME`
+    so the main loop can record the correct `scrape_result_category`
+    without duplicating the retry / status categorisation here.
     """
     last_err: str | None = None
+    last_status: int | None = None
     for attempt in range(retries + 1):  # 1 initial + N retries
         try:
             resp = session.get(url, timeout=10)
+            last_status = resp.status_code
             if resp.status_code == 404:
+                _set_outcome("not_found", 404)
                 return None
             if resp.status_code == 200:
+                _set_outcome("ok", 200)   # main loop refines to priced / page_reached_no_price
                 return resp.text
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 last_err = f"HTTP {resp.status_code} retry"
                 time.sleep(backoff_seconds * (attempt + 1))
                 continue
             print(f"  HTTP {resp.status_code}")
+            _set_outcome("transient_http_failure", resp.status_code)
             return None
         except requests.exceptions.Timeout:
             last_err = "Timeout"
@@ -591,12 +614,17 @@ def fetch_card_page(url, retries=2, backoff_seconds=1.5):
             last_err = f"NetErr: {str(e)[:60]}"
         except Exception as e:
             print(f"  Error: {e}")
+            _set_outcome("transient_http_failure", None)
             return None
         # Retry if we didn't succeed and have attempts left
         if attempt < retries:
             time.sleep(backoff_seconds * (attempt + 1))
         else:
             print(f"  {last_err} (gave up after {retries + 1} attempts)")
+            _set_outcome(
+                "timeout" if last_err and last_err.startswith("Timeout") else "transient_http_failure",
+                last_status,
+            )
             return None
     return None
 
@@ -660,12 +688,23 @@ def main():
     # Block 5A-W-49 — apply cadence filter after CSV load. `all` is a
     # no-op. `daily` / `weekly` bulk-load classification state once and
     # filter locally so we never issue one DB query per card.
+    #
+    # Block 5A-W-49-FIX2 — we ALWAYS load the state map (even for
+    # cadence=all) so the scrape_attempt_state writer can seed each
+    # card's prior streak. Missing scrape_attempt_state table is
+    # handled gracefully inside load_state_from_supabase.
+    import cadence as _cadence
+    import scrape_state as _scrape_state
+    cadence_state_map: dict = {}
+    try:
+        cadence_state_map = _cadence.load_state_from_supabase(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"WARN: cadence state load failed: {e}. Continuing without state.")
+        cadence_state_map = {}
     if cadence in ("daily", "weekly"):
         try:
-            import cadence as _cadence
-            state = _cadence.load_state_from_supabase(SUPABASE_URL, SUPABASE_KEY)
             before = len(cards)
-            cards, hist = _cadence.filter_cards_by_cadence(cards, cadence, state)
+            cards, hist = _cadence.filter_cards_by_cadence(cards, cadence, cadence_state_map)
             print(f"\n[cadence={cadence}] filtered {before} → {len(cards)} cards")
             for c, n in hist.items():
                 print(f"  {c.value:<18} : {n}")
@@ -675,6 +714,8 @@ def main():
         if not cards:
             print("No cards remain after cadence filter. Nothing to do.")
             sys.exit(0)
+
+    scrape_state_buffer = _scrape_state.ScrapeStateBuffer(state_map=cadence_state_map)
 
     if test_mode:
         cards = cards[:5]
@@ -730,6 +771,10 @@ def main():
         print(f"[{i+1}/{len(cards)}] {product_name} ({console_name})")
 
         html = fetch_card_page(url)
+        # Block 5A-W-49-FIX2 — capture the fetch outcome for
+        # scrape_attempt_state. `LAST_FETCH_OUTCOME` is set inside
+        # fetch_card_page before every return path.
+        fetch_outcome = dict(LAST_FETCH_OUTCOME)
 
         # Recent-sales ingestion (flag-gated + allow-list-gated).
         # Runs BEFORE the current-price `not current` gate so a card whose
@@ -754,10 +799,30 @@ def main():
         if not current:
             not_found += 1
             print(f"  ✗ No price data at {url}")
+            # Block 5A-W-49-FIX2 — record the scrape outcome. If fetch
+            # returned None (404 / transient / timeout), fetch_outcome
+            # already holds the right category. If fetch returned 200
+            # but no prices extracted, category is `page_reached_no_price`.
+            state_category = fetch_outcome.get("category")
+            if state_category == "ok":
+                state_category = "page_reached_no_price"
+            elif state_category is None:
+                state_category = "transient_http_failure"
+            scrape_state_buffer.record(
+                bare_slug=str(pc_id),
+                category=state_category,
+                http_status=fetch_outcome.get("http_status"),
+            )
             time.sleep(REQUEST_DELAY)
             continue
 
         found += 1
+        # Block 5A-W-49-FIX2 — successful priced result resets streak.
+        scrape_state_buffer.record(
+            bare_slug=str(pc_id),
+            category="priced",
+            http_status=fetch_outcome.get("http_status") or 200,
+        )
         records = []
 
         # Image extraction
@@ -818,7 +883,19 @@ def main():
             errors += 1
             print(f"  ✗ Supabase push failed")
 
+        # Block 5A-W-49-FIX2 — flush the scrape_attempt_state buffer
+        # every 100 cards so a mid-run interruption preserves most of
+        # the outcome writes.
+        if scrape_state_buffer.pending_count() >= 100:
+            if not scrape_state_buffer.flush(SUPABASE_URL, SUPABASE_KEY):
+                errors += 1
+
         time.sleep(REQUEST_DELAY)
+
+    # Block 5A-W-49-FIX2 — final buffer flush before we tear down.
+    if scrape_state_buffer.pending_count() > 0:
+        if not scrape_state_buffer.flush(SUPABASE_URL, SUPABASE_KEY):
+            errors += 1
 
     if recent_sales_ingestion is not None:
         try:
@@ -835,6 +912,7 @@ def main():
     print(f"Images saved:     {images_saved}")
     print(f"Volumes saved:    {volumes_saved}")
     print(f"Records pushed:   {total_records}")
+    print(f"scrape_state errors: {scrape_state_buffer.error_count()}")
     print(f"{'='*60}")
 
 

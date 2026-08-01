@@ -212,6 +212,88 @@ class TestFilterCards(unittest.TestCase):
         self.assertEqual(d_slugs | w_slugs, {c["card_slug"] for c in cards})
 
 
+class TestSlugNormalisationFIX2(unittest.TestCase):
+    """Block 5A-W-49-FIX2 — filter_cards_by_cadence must accept both
+    bare and pc-prefixed slugs and classify them identically.
+
+    Previously the scraper passed `card_slug=pc-<id>` to a state map
+    keyed on `<id>`, so every card fell into DAILY_DISCOVERY. This
+    test suite pins the corrected behaviour."""
+
+    def _state(self):
+        # 4 cards spanning DAILY_VALUE / WEEKLY_LOW / boundary / no data
+        return {
+            "1001": {"latest_raw_cents": 500},   # DAILY_VALUE
+            "1002": {"latest_raw_cents": 199},   # WEEKLY_LOW
+            "1003": {"latest_raw_cents": 200},   # DAILY_VALUE (boundary)
+            # 1004: no state → DAILY_DISCOVERY
+        }
+
+    def test_bare_and_prefixed_classify_identically(self):
+        bare_cards = [
+            {"card_slug": "1001"},
+            {"card_slug": "1002"},
+            {"card_slug": "1003"},
+            {"card_slug": "1004"},
+        ]
+        prefixed_cards = [
+            {"card_slug": "pc-1001"},
+            {"card_slug": "pc-1002"},
+            {"card_slug": "pc-1003"},
+            {"card_slug": "pc-1004"},
+        ]
+        _, hist_bare = cadence.filter_cards_by_cadence(bare_cards, "all", self._state())
+        _, hist_pref = cadence.filter_cards_by_cadence(prefixed_cards, "all", self._state())
+        self.assertEqual(hist_bare, hist_pref)
+        # And each cohort has the expected total
+        self.assertEqual(hist_bare[cadence.Cohort.DAILY_VALUE], 2)
+        self.assertEqual(hist_bare[cadence.Cohort.WEEKLY_LOW], 1)
+        self.assertEqual(hist_bare[cadence.Cohort.DAILY_DISCOVERY], 1)
+
+    def test_prefixed_slug_daily_filter_includes_daily_value(self):
+        cards = [{"card_slug": "pc-1001"}]  # DAILY_VALUE
+        out, _ = cadence.filter_cards_by_cadence(cards, "daily", self._state())
+        self.assertEqual([c["card_slug"] for c in out], ["pc-1001"])
+
+    def test_prefixed_slug_weekly_filter_includes_weekly_low(self):
+        cards = [{"card_slug": "pc-1002"}]  # WEEKLY_LOW
+        out, _ = cadence.filter_cards_by_cadence(cards, "weekly", self._state())
+        self.assertEqual([c["card_slug"] for c in out], ["pc-1002"])
+
+    def test_prefixed_slug_boundary_two_dollars_is_daily(self):
+        cards = [{"card_slug": "pc-1003"}]  # exactly $2.00
+        out, _ = cadence.filter_cards_by_cadence(cards, "daily", self._state())
+        self.assertEqual(len(out), 1)
+        out, _ = cadence.filter_cards_by_cadence(cards, "weekly", self._state())
+        self.assertEqual(out, [])
+
+    def test_prefixed_slug_one_ninety_nine_is_weekly(self):
+        cards = [{"card_slug": "pc-1002"}]   # $1.99
+        out, _ = cadence.filter_cards_by_cadence(cards, "weekly", self._state())
+        self.assertEqual(len(out), 1)
+        out, _ = cadence.filter_cards_by_cadence(cards, "daily", self._state())
+        self.assertEqual(out, [])
+
+    def test_no_card_falls_into_discovery_solely_due_to_prefix(self):
+        # Every prefixed slug that HAS state must land in the same
+        # cohort as its bare equivalent, never DAILY_DISCOVERY-by-mistake.
+        state = self._state()
+        cards = [{"card_slug": f"pc-{k}"} for k in state]
+        out_all, hist = cadence.filter_cards_by_cadence(cards, "all", state)
+        # None of the three stateful cards fell into DAILY_DISCOVERY
+        self.assertEqual(hist[cadence.Cohort.DAILY_DISCOVERY], 0)
+
+    def test_cadence_all_bypasses_filter_regardless_of_prefix(self):
+        cards = [{"card_slug": f"pc-{k}"} for k in ("1001", "1002", "1003", "1004")]
+        out, _ = cadence.filter_cards_by_cadence(cards, "all", self._state())
+        self.assertEqual(len(out), 4)
+
+    def test_bare_slug_helper(self):
+        self.assertEqual(cadence._bare_slug("8330138"), "8330138")
+        self.assertEqual(cadence._bare_slug("pc-8330138"), "8330138")
+        self.assertEqual(cadence._bare_slug(8330138), "8330138")
+
+
 class TestBulkLoader(unittest.TestCase):
     """load_state_from_supabase uses paginated bulk queries via
     injected http_get. Missing scrape_attempt_state table is graceful."""

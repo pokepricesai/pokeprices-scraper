@@ -224,6 +224,23 @@ def load_state_from_supabase(
 # Filter helper — used by scraper.main()
 # ---------------------------------------------------------------------
 
+def _bare_slug(card_slug) -> str:
+    """
+    Block 5A-W-49-FIX2 — normalise a `card_slug` value to the BARE
+    numeric string used by every non-daily_prices table.
+
+    The scraper's `load_cards_from_pc_csvs` builds
+    `card_slug = f"pc-{pc_id}"` because that same value ends up as the
+    row key in daily_prices (which uses the `pc-` prefix). Every other
+    table — cards, card_trends, scrape_attempt_state,
+    provider_card_links — uses the BARE numeric slug. cadence state is
+    keyed on the bare form, so we normalise here and here only. The
+    price-writing path is untouched.
+    """
+    s = str(card_slug)
+    return s[3:] if s.startswith("pc-") else s
+
+
 def filter_cards_by_cadence(
     cards: Iterable[dict],
     cadence: str,
@@ -234,13 +251,19 @@ def filter_cards_by_cadence(
     a `cadence` run, plus a cohort-histogram of every card considered
     (regardless of whether it was included).
 
-    Each `card` dict must have a `card_slug` key matching the format
-    used by `cards.card_slug` in the DB (bare numeric string).
+    Accepts BOTH `card_slug` formats:
+      * bare numeric (e.g. "8330138") — used by cards / card_trends
+      * pc-prefixed (e.g. "pc-8330138") — used by daily_prices and by
+        the scraper's in-memory card dicts
+
+    Normalisation happens ONLY for the cadence-state lookup. The
+    `card_slug` value on each dict is not mutated — downstream
+    daily_prices writes still see whatever the caller passed in.
     """
     kept = []
     hist: dict[Cohort, int] = {c: 0 for c in Cohort}
     for c in cards:
-        slug = c["card_slug"]
+        slug = _bare_slug(c["card_slug"])
         s = state.get(slug, {})
         coh = classify(
             latest_raw_cents=s.get("latest_raw_cents"),
