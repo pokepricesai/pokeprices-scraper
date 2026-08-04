@@ -206,7 +206,9 @@
     "total_cards": 171,
     "row_count": 226,
     "singles": 224,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 171,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Black Bolt.csv",
@@ -481,7 +483,9 @@
     "total_cards": 150,
     "row_count": 285,
     "singles": 283,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 150,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Gaia Volcano.csv",
@@ -976,7 +980,9 @@
     "total_cards": 108,
     "row_count": 143,
     "singles": 141,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 108,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Rulers of the Heavens.csv",
@@ -998,7 +1004,9 @@
     "total_cards": 165,
     "row_count": 520,
     "singles": 516,
-    "sealed": 4
+    "sealed": 4,
+    "printed_denominator": 165,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Scarlet Ex.csv",
@@ -1053,7 +1061,9 @@
     "total_cards": 190,
     "row_count": 340,
     "singles": 335,
-    "sealed": 5
+    "sealed": 5,
+    "printed_denominator": 190,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Shiny Treasure ex.csv",
@@ -1064,7 +1074,9 @@
     "total_cards": 190,
     "row_count": 486,
     "singles": 484,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 190,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Snow Hazard.csv",
@@ -1174,7 +1186,9 @@
     "total_cards": 173,
     "row_count": 362,
     "singles": 359,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 173,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Tag Bolt.csv",
@@ -1207,7 +1221,9 @@
     "total_cards": 128,
     "row_count": 485,
     "singles": 483,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 187,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese The Town on No Map.csv",
@@ -1262,7 +1278,9 @@
     "total_cards": 184,
     "row_count": 341,
     "singles": 330,
-    "sealed": 11
+    "sealed": 11,
+    "printed_denominator": 184,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese VS.csv",
