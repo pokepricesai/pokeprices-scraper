@@ -52,7 +52,9 @@
     "total_cards": 18,
     "row_count": 31,
     "singles": 18,
-    "sealed": 13
+    "sealed": 13,
+    "printed_denominator": 30,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese 20th Anniversary.csv",
@@ -63,7 +65,9 @@
     "total_cards": 87,
     "row_count": 106,
     "singles": 103,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 87,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese 25th Anniversary Collection.csv",
@@ -74,7 +78,9 @@
     "total_cards": 28,
     "row_count": 61,
     "singles": 46,
-    "sealed": 15
+    "sealed": 15,
+    "printed_denominator": 28,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese 25th Anniversary Promo.csv",
@@ -85,7 +91,9 @@
     "total_cards": 25,
     "row_count": 26,
     "singles": 25,
-    "sealed": 1
+    "sealed": 1,
+    "printed_denominator": 25,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Abyss Eye.csv",
@@ -96,7 +104,9 @@
     "total_cards": 118,
     "row_count": 121,
     "singles": 118,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 81,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Advent of Arceus.csv",
@@ -107,7 +117,9 @@
     "total_cards": 90,
     "row_count": 180,
     "singles": 178,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 90,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Alter Genesis.csv",
@@ -118,7 +130,9 @@
     "total_cards": 95,
     "row_count": 119,
     "singles": 117,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 95,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Amazing Volt Tackle.csv",
@@ -129,7 +143,9 @@
     "total_cards": 100,
     "row_count": 123,
     "singles": 121,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 100,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Ancient Roar.csv",
@@ -140,7 +156,9 @@
     "total_cards": 66,
     "row_count": 97,
     "singles": 95,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 66,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Awakening Legends.csv",
@@ -162,7 +180,9 @@
     "total_cards": 51,
     "row_count": 178,
     "singles": 176,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 78,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Bandit Ring.csv",
@@ -173,7 +193,9 @@
     "total_cards": 84,
     "row_count": 196,
     "singles": 194,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 81,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Battle Region.csv",
@@ -184,7 +206,9 @@
     "total_cards": 70,
     "row_count": 137,
     "singles": 135,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 67,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Beat of the Frontier.csv",
@@ -195,7 +219,9 @@
     "total_cards": 100,
     "row_count": 202,
     "singles": 200,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 100,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Best of XY.csv",
@@ -230,7 +256,9 @@
     "total_cards": 67,
     "row_count": 92,
     "singles": 90,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 67,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Bonds to the End of Time.csv",
@@ -241,7 +269,9 @@
     "total_cards": 90,
     "row_count": 179,
     "singles": 176,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 90,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese CD Promo.csv",
@@ -274,7 +304,9 @@
     "total_cards": 82,
     "row_count": 167,
     "singles": 165,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 82,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Clay Burst.csv",
@@ -285,7 +317,9 @@
     "total_cards": 71,
     "row_count": 101,
     "singles": 99,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 71,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Cold Flare.csv",
@@ -296,7 +330,9 @@
     "total_cards": 65,
     "row_count": 132,
     "singles": 130,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 59,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Crimson Haze.csv",
@@ -307,7 +343,9 @@
     "total_cards": 71,
     "row_count": 98,
     "singles": 96,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 66,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Crossing the Ruins.csv",
@@ -329,7 +367,9 @@
     "total_cards": 71,
     "row_count": 102,
     "singles": 100,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 71,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Dark Phantasma.csv",
@@ -340,7 +380,9 @@
     "total_cards": 71,
     "row_count": 178,
     "singles": 176,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 71,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Darkness, and to Light.csv",
@@ -362,7 +404,9 @@
     "total_cards": 95,
     "row_count": 118,
     "singles": 116,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 95,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Dream League.csv",
@@ -373,7 +417,9 @@
     "total_cards": 49,
     "row_count": 77,
     "singles": 75,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 49,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese EX Battle Boost.csv",
@@ -384,7 +430,9 @@
     "total_cards": 99,
     "row_count": 226,
     "singles": 224,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 93,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Eevee Heroes.csv",
@@ -395,7 +443,9 @@
     "total_cards": 69,
     "row_count": 105,
     "singles": 101,
-    "sealed": 4
+    "sealed": 4,
+    "printed_denominator": 69,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Emerald Break.csv",
@@ -406,7 +456,9 @@
     "total_cards": 78,
     "row_count": 184,
     "singles": 182,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 78,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Expansion Pack.csv",
@@ -428,7 +480,9 @@
     "total_cards": 128,
     "row_count": 259,
     "singles": 259,
-    "sealed": 0
+    "sealed": 0,
+    "printed_denominator": 128,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Flight of Legends.csv",
@@ -439,7 +493,9 @@
     "total_cards": 82,
     "row_count": 164,
     "singles": 162,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 82,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Fusion Arts.csv",
@@ -450,7 +506,9 @@
     "total_cards": 100,
     "row_count": 131,
     "singles": 129,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 100,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Future Flash.csv",
@@ -461,7 +519,9 @@
     "total_cards": 66,
     "row_count": 97,
     "singles": 95,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 66,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese GX Battle Boost.csv",
@@ -472,7 +532,9 @@
     "total_cards": 125,
     "row_count": 128,
     "singles": 126,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 114,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese GX Ultra Shiny.csv",
@@ -496,7 +558,9 @@
     "total_cards": 70,
     "row_count": 163,
     "singles": 160,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 70,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Glory of Team Rocket.csv",
@@ -507,7 +571,9 @@
     "total_cards": 132,
     "row_count": 135,
     "singles": 132,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 98,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Go.csv",
@@ -518,7 +584,9 @@
     "total_cards": 71,
     "row_count": 117,
     "singles": 96,
-    "sealed": 21
+    "sealed": 21,
+    "printed_denominator": 71,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Gold, Silver, New World.csv",
@@ -540,7 +608,9 @@
     "total_cards": 106,
     "row_count": 213,
     "singles": 211,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 106,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Heat Wave Arena.csv",
@@ -573,7 +643,9 @@
     "total_cards": 86,
     "row_count": 181,
     "singles": 181,
-    "sealed": 0
+    "sealed": 0,
+    "printed_denominator": 86,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Incandescent Arcana.csv",
@@ -584,7 +656,9 @@
     "total_cards": 68,
     "row_count": 157,
     "singles": 155,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 68,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Inferno X.csv",
@@ -595,7 +669,9 @@
     "total_cards": 116,
     "row_count": 118,
     "singles": 116,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 80,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Intense Fight in the Destroyed Sky.csv",
@@ -606,7 +682,9 @@
     "total_cards": 92,
     "row_count": 180,
     "singles": 178,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 92,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Jungle.csv",
@@ -639,7 +717,9 @@
     "total_cards": 100,
     "row_count": 129,
     "singles": 127,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 100,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Magma VS Aqua Two Ambitions.csv",
@@ -650,7 +730,9 @@
     "total_cards": 80,
     "row_count": 162,
     "singles": 160,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 80,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Mask of Change.csv",
@@ -672,7 +754,9 @@
     "total_cards": 92,
     "row_count": 96,
     "singles": 92,
-    "sealed": 4
+    "sealed": 4,
+    "printed_denominator": 63,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Mega Dream ex.csv",
@@ -683,7 +767,9 @@
     "total_cards": 250,
     "row_count": 489,
     "singles": 487,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 193,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Mega Symphonia.csv",
@@ -694,7 +780,9 @@
     "total_cards": 92,
     "row_count": 95,
     "singles": 92,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 63,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Megalo Cannon.csv",
@@ -705,7 +793,9 @@
     "total_cards": 86,
     "row_count": 174,
     "singles": 172,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 76,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Meiji Promo.csv",
@@ -727,7 +817,9 @@
     "total_cards": 75,
     "row_count": 150,
     "singles": 150,
-    "sealed": 0
+    "sealed": 0,
+    "printed_denominator": 75,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Miracle Twins.csv",
@@ -738,7 +830,9 @@
     "total_cards": 94,
     "row_count": 117,
     "singles": 115,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 94,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Mysterious Mountains.csv",
@@ -749,7 +843,9 @@
     "total_cards": 91,
     "row_count": 185,
     "singles": 183,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 88,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Mystery of the Fossils.csv",
@@ -782,7 +878,9 @@
     "total_cards": 66,
     "row_count": 97,
     "singles": 95,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 64,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Nihil Zero.csv",
@@ -793,7 +891,9 @@
     "total_cards": 117,
     "row_count": 120,
     "singles": 117,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 80,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Ninja Spinner.csv",
@@ -804,7 +904,9 @@
     "total_cards": 120,
     "row_count": 122,
     "singles": 120,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 83,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Offense and Defense of the Furthest Ends.csv",
@@ -815,7 +917,9 @@
     "total_cards": 68,
     "row_count": 136,
     "singles": 136,
-    "sealed": 0
+    "sealed": 0,
+    "printed_denominator": 68,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Old Maid.csv",
@@ -837,7 +941,9 @@
     "total_cards": 100,
     "row_count": 129,
     "singles": 126,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 98,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Paradise Dragona.csv",
@@ -848,7 +954,9 @@
     "total_cards": 63,
     "row_count": 96,
     "singles": 94,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 64,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Phantom Gate.csv",
@@ -859,7 +967,9 @@
     "total_cards": 88,
     "row_count": 196,
     "singles": 194,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 88,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Plasma Gale.csv",
@@ -870,7 +980,9 @@
     "total_cards": 79,
     "row_count": 160,
     "singles": 158,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 70,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese PokeKyun.csv",
@@ -881,7 +993,9 @@
     "total_cards": 32,
     "row_count": 34,
     "singles": 32,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 32,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Promo.csv",
@@ -903,7 +1017,9 @@
     "total_cards": 62,
     "row_count": 94,
     "singles": 92,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 62,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Red Flash.csv",
@@ -914,7 +1030,9 @@
     "total_cards": 65,
     "row_count": 132,
     "singles": 129,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 59,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Remix Bout.csv",
@@ -925,7 +1043,9 @@
     "total_cards": 70,
     "row_count": 82,
     "singles": 80,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 64,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Reviving Legends.csv",
@@ -936,7 +1056,9 @@
     "total_cards": 81,
     "row_count": 189,
     "singles": 187,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 80,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Rising Fist.csv",
@@ -947,7 +1069,9 @@
     "total_cards": 88,
     "row_count": 212,
     "singles": 210,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 96,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Rocket Gang Strikes Back.csv",
@@ -958,7 +1082,9 @@
     "total_cards": 85,
     "row_count": 169,
     "singles": 167,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 84,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Rocket Gang.csv",
@@ -993,7 +1119,9 @@
     "total_cards": 54,
     "row_count": 110,
     "singles": 108,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 54,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Scarlet & Violet 151.csv",
@@ -1050,7 +1178,9 @@
     "total_cards": 72,
     "row_count": 84,
     "singles": 82,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 72,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Shiny Star V.csv",
@@ -1087,7 +1217,9 @@
     "total_cards": 71,
     "row_count": 102,
     "singles": 99,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 71,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Space-Time.csv",
@@ -1109,7 +1241,9 @@
     "total_cards": 91,
     "row_count": 185,
     "singles": 182,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 88,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Star Birth.csv",
@@ -1120,7 +1254,9 @@
     "total_cards": 100,
     "row_count": 129,
     "singles": 127,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 100,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Start Deck 100 Battle Collection.csv",
@@ -1153,7 +1289,9 @@
     "total_cards": 100,
     "row_count": 137,
     "singles": 135,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 102,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Super Electric Breaker.csv",
@@ -1164,7 +1302,9 @@
     "total_cards": 71,
     "row_count": 141,
     "singles": 139,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 106,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Super-Burst Impact.csv",
@@ -1175,7 +1315,9 @@
     "total_cards": 94,
     "row_count": 114,
     "singles": 111,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 95,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Tag All Stars.csv",
@@ -1199,7 +1341,9 @@
     "total_cards": 95,
     "row_count": 121,
     "singles": 118,
-    "sealed": 3
+    "sealed": 3,
+    "printed_denominator": 95,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Temple of Anger.csv",
@@ -1234,7 +1378,9 @@
     "total_cards": 92,
     "row_count": 186,
     "singles": 182,
-    "sealed": 4
+    "sealed": 4,
+    "printed_denominator": 92,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Topsun.csv",
@@ -1256,7 +1402,9 @@
     "total_cards": 73,
     "row_count": 105,
     "singles": 103,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 73,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese Undone Seal.csv",
@@ -1267,7 +1415,9 @@
     "total_cards": 83,
     "row_count": 165,
     "singles": 163,
-    "sealed": 2
+    "sealed": 2,
+    "printed_denominator": 83,
+    "printed_denominator_source": "bulbapedia_luke_2026-08-04"
   },
   {
     "csv": "Pokemon Japanese VMAX Climax.csv",

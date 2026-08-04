@@ -103,7 +103,7 @@ def main():
                     f"as the printed denominator.",
                     file=sys.stderr,
                 )
-                failures.append({"set_name": e["set_name"], "reason": "printed_denominator missing"})
+                failures.append((e["console_name"], -1, f"printed_denominator missing from manifest for {e['set_name']}"))
                 continue
             print(
                 f"WARN: {e['set_name']}: no printed_denominator supplied. "
