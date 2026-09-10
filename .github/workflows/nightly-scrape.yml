@@ -42,7 +42,16 @@ jobs:
       - name: Run batch 1
         run: python pokeprices_scraper_v8.py --sets-file batches/batch1.txt --cadence $CADENCE
 
-  batch2:
+  # Block 5A-S-58A — original batch2 packed 8,749 rows (~27% above the
+  # mean of ~6,915), which pushed real-world wall-clock past the 5h
+  # ubuntu-latest job ceiling and GitHub cancelled it. Pokemon Promo
+  # alone contributes 2,380 rows and cannot be moved to another batch
+  # without unbalancing everything else. Splitting batch2 into
+  # batch2a/batch2b (~4,375 rows each) keeps every other batch's
+  # coverage untouched while bringing both halves comfortably under
+  # ~3h. Downstream `needs:` on refresh-and-analytics extended to wait
+  # for both halves.
+  batch2a:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -52,8 +61,21 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install requests beautifulsoup4
-      - name: Run batch 2
-        run: python pokeprices_scraper_v8.py --sets-file batches/batch2.txt --cadence $CADENCE
+      - name: Run batch 2a
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch2a.txt --cadence $CADENCE
+
+  batch2b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+      - name: Run batch 2b
+        run: python pokeprices_scraper_v8.py --sets-file batches/batch2b.txt --cadence $CADENCE
 
   batch3:
     runs-on: ubuntu-latest
@@ -208,7 +230,7 @@ jobs:
   # —— Refresh card_trends + compute analytics ———————————————————————
   refresh-and-analytics:
     runs-on: ubuntu-latest
-    needs: [batch1, batch2, batch3, batch4, batch5, batch6, batch-japanese-1, batch-japanese-2, batch-japanese-3, batch-japanese-4, batch-japanese-5]
+    needs: [batch1, batch2a, batch2b, batch3, batch4, batch5, batch6, batch-japanese-1, batch-japanese-2, batch-japanese-3, batch-japanese-4, batch-japanese-5]
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
