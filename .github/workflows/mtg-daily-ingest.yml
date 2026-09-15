@@ -1,0 +1,122 @@
+name: MTG Daily Ingest
+
+# Stage 1D — daily MTGJSON AllPricesToday ingest + current-price refresh
+# + Scryfall delta + MTGJSON UUID identifier delta + optional weekly
+# AllPrices gap repair.
+#
+# See docs/mtg-stage-1d-runbook.md.
+#
+# Cron entries are DISABLED (commented out) until every manual gate in
+# the runbook has passed. When enabled:
+#   * 15:00 UTC daily — primary run. On Mondays, additionally performs
+#     the weekly AllPrices gap repair (Monday detected inside the
+#     workflow via `date -u +%u`).
+#   * 18:00 UTC daily — cheap late-day fallback. Exits fast on the
+#     build-guard if the 15:00 run already ingested today's build.
+#
+# Concurrency: GitHub Actions concurrency group serialises within the
+# repo. The DB-backed run lock (public.mtg_daily_ingest_locks) is
+# fail-fast — a second contender exits code 4 rather than waiting.
+
+on:
+  schedule:
+    - cron: '0 15 * * *'   # 15:00 UTC daily — primary; Monday adds weekly repair.
+    - cron: '0 18 * * *'   # 18:00 UTC daily — cheap late-day fallback.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Parse + report; do not write.'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true','false']
+      skip_scryfall:
+        description: 'Skip Scryfall freshness check.'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true','false']
+      skip_prices:
+        description: 'Skip MTGJSON prices step.'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true','false']
+      force_weekly_gap_repair:
+        description: 'Force weekly AllPrices gap repair regardless of day.'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true','false']
+
+concurrency:
+  group: mtg-daily-ingest
+  cancel-in-progress: false
+
+env:
+  SUPABASE_URL:                  ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY:          ${{ secrets.SUPABASE_SERVICE_KEY }}
+  MTG_DAILY_INGEST_ENABLED:      'true'
+  MTG_PRICING_INGESTION_ENABLED: 'true'
+
+jobs:
+  mtg-daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests ijson python-dateutil
+
+      - name: Assemble args
+        id: args
+        run: |
+          ARGS=""
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [[ "${{ github.event.inputs.skip_scryfall }}" == "true" ]]; then
+            ARGS="$ARGS --skip-scryfall"
+          fi
+          if [[ "${{ github.event.inputs.skip_prices }}" == "true" ]]; then
+            ARGS="$ARGS --skip-prices"
+          fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Determine weekly-gap-repair flag
+        id: weekly
+        # Weekly repair fires when:
+        #   * The primary 15:00 UTC cron triggered this run AND today is
+        #     Monday (UTC), OR
+        #   * The manual dispatch input force_weekly_gap_repair='true'.
+        # The 18:00 UTC fallback NEVER triggers the deep repair, so we
+        # avoid duplicate multi-GB downloads on Mondays.
+        run: |
+          FLAG=""
+          if [[ "${{ github.event.inputs.force_weekly_gap_repair }}" == "true" ]]; then
+            FLAG="--weekly-gap-repair"
+          elif [[ "${{ github.event.schedule }}" == "0 15 * * *" ]] && [[ "$(date -u +%u)" == "1" ]]; then
+            FLAG="--weekly-gap-repair"
+          fi
+          echo "flag=$FLAG" >> "$GITHUB_OUTPUT"
+
+      - name: Run Stage 1D daily pipeline
+        run: |
+          set -o pipefail
+          python mtg_daily_pipeline.py --verbose ${{ steps.args.outputs.args }} ${{ steps.weekly.outputs.flag }} \
+            | tee mtg_daily_pipeline_summary.json
+
+      - name: Upload pipeline summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mtg-daily-pipeline-summary-${{ github.run_id }}
+          path: mtg_daily_pipeline_summary.json
+          retention-days: 30
