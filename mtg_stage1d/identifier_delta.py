@@ -126,20 +126,22 @@ def _iter_entries(allids_gz: Path) -> Iterator[tuple[str, dict]]:
 
 
 def _read_meta(allids_gz: Path) -> dict:
-    """Read the ``meta`` object at the top of the file (small)."""
+    """Read the ``meta`` object at the top of the file (small).
+
+    MTGJSON v5 emits ``{"meta": {"date": "...", "version": "..."}, ...}``.
+    Legacy builds nested as ``{"meta": {"data": {"date": "...", ...}}}``.
+    Return the flat v5 shape when found, otherwise fall back to the
+    legacy nested "data" child, otherwise return {}.
+    """
     import ijson
-    with gzip.open(allids_gz, "rb") as raw:
-        for prefix, event, value in ijson.parse(raw):
-            if prefix == "meta" and event == "map_key":
-                continue
-            if prefix.startswith("data"):
-                break
-        # Simpler: use kvitems on 'meta'
+    flat: dict = {}
     with gzip.open(allids_gz, "rb") as raw:
         for k, v in ijson.kvitems(raw, "meta"):
-            if k == "data":
-                return v if isinstance(v, dict) else {}
-    return {}
+            if k == "data" and isinstance(v, dict):
+                return v
+            if isinstance(v, (str, int, float, bool)):
+                flat[k] = v
+    return flat
 
 
 def extract_scryfall_id(entry: dict) -> str | None:

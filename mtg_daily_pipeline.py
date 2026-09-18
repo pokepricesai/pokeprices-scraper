@@ -217,6 +217,7 @@ def main(argv=None) -> int:
             else:
                 summary["partitions"] = partitions.ensure_current_and_next(supabase)
         except Exception as e:
+            log.error("FAILED_GATE=partitions_ensure err=%s", e)
             log.exception("partition step failed")
             summary["partitions"] = {"error": str(e)}
             return 5
@@ -253,9 +254,11 @@ def main(argv=None) -> int:
             try:
                 local_gz, allprices_expected, allprices_actual = allprices_today.download_and_verify(workspace)
             except allprices_today.ChecksumMismatch as e:
+                log.error("FAILED_GATE=allprices_checksum err=%s", e)
                 summary["prices"] = {"error": f"checksum_mismatch: {e}"}
                 return 5
             except Exception as e:
+                log.error("FAILED_GATE=allprices_download err=%s", e)
                 log.exception("download failed")
                 summary["prices"] = {"error": f"download: {e}"}
                 return 5
@@ -264,10 +267,12 @@ def main(argv=None) -> int:
             try:
                 target_date = allprices_today.read_meta_date(local_gz)
             except allprices_today.MalformedSource as e:
+                log.error("FAILED_GATE=allprices_meta_date_missing err=%s", e)
                 log.exception("meta.date read failed (malformed)")
                 summary["prices"] = {"error": f"malformed: {e}"}
                 return 5
             except Exception as e:
+                log.error("FAILED_GATE=allprices_meta_read err=%s", e)
                 log.exception("meta.date read failed")
                 summary["prices"] = {"error": f"meta_read: {e}"}
                 return 5
@@ -360,12 +365,17 @@ def main(argv=None) -> int:
         if (isinstance(summary.get("prices"), dict)
                 and summary["prices"].get("action") == "pending_ingest"
                 and local_gz is not None and target_date is not None):
+            # Reconciliation is built from Supabase, not a local JSON file.
+            # The legacy 107 MB reconciliation.json path was fragile on CI —
+            # a fresh checkout never has it. The DB path uses the
+            # mtg_external_identifiers table refreshed moments earlier by
+            # identifier_delta, plus the mtg_printing_finishes lookup, and
+            # produces a functionally identical ReconciliationIndex for
+            # the ingest loop (see mi.load_reconciliation_from_db).
             try:
-                recon = mi.load_reconciliation(
-                    mi.default_reconciliation_path(_REPO_ROOT),
-                    mi.load_finish_lookup(supabase),
-                )
+                recon = mi.load_reconciliation_from_db(supabase)
             except Exception as e:
+                log.error("FAILED_GATE=reconciliation_db_load err=%s", e)
                 log.exception("reconciliation load failed")
                 summary["prices"] = {"error": f"reconciliation: {e}"}
                 return 5

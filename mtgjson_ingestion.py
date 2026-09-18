@@ -309,6 +309,64 @@ def load_reconciliation(path: Path, finish_lookup: dict[tuple[str, str], str]) -
     )
 
 
+def load_reconciliation_from_db(supabase: SupabaseClient) -> ReconciliationIndex:
+    """Build a ReconciliationIndex entirely from Supabase state.
+
+    Replaces the 107 MB reconciliation.json file dependency on CI. The
+    two fields the ingester actually reads at runtime are:
+
+    * ``uuid_to_printing`` — sourced from ``mtg_external_identifiers``
+      rows where ``provider='mtgjson' AND identifier_type='uuid'``.
+      This table is refreshed at the start of every daily run by
+      :mod:`mtg_stage1d.identifier_delta`, so it is always up-to-date
+      by the time this function is called.
+    * ``printing_finishes`` — same shape as the JSON path: derived from
+      :func:`load_finish_lookup`.
+
+    ``meta_by_uuid`` is intentionally an empty dict. The AllPricesIngestion
+    loop does not read it (verified 2026-09-18). ``mtgjson_meta`` is
+    likewise empty; :mod:`mtg_daily_pipeline` overrides it with the
+    fresh ``AllPricesToday.meta`` immediately after this function
+    returns.
+    """
+    finish_lookup = load_finish_lookup(supabase)
+    printing_finishes: dict[str, dict[str, str]] = {}
+    for (pid, scryfall_finish), fid in finish_lookup.items():
+        printing_finishes.setdefault(pid, {})[scryfall_finish] = fid
+
+    uuid_to_printing: dict[str, str] = {}
+    offset = 0
+    page = 1000
+    while True:
+        code, body = supabase._req(
+            "/rest/v1/mtg_external_identifiers"
+            "?provider=eq.mtgjson&identifier_type=eq.uuid"
+            f"&select=identifier_value,printing_id&limit={page}&offset={offset}"
+        )
+        if code >= 400:
+            raise RuntimeError(
+                f"mtg_external_identifiers fetch failed HTTP {code}: {body[:200] if body else ''}"
+            )
+        rows = json.loads(body) if body else []
+        if not rows:
+            break
+        for r in rows:
+            uid = r.get("identifier_value")
+            pid = r.get("printing_id")
+            if isinstance(uid, str) and isinstance(pid, str):
+                uuid_to_printing[uid] = pid
+        if len(rows) < page:
+            break
+        offset += page
+
+    return ReconciliationIndex(
+        uuid_to_printing=uuid_to_printing,
+        printing_finishes=printing_finishes,
+        meta_by_uuid={},
+        mtgjson_meta={},
+    )
+
+
 def load_finish_lookup(supabase: SupabaseClient) -> dict[tuple[str, str], str]:
     """Read mtg_printing_finishes and return (printing_id, finish) -> id."""
     lookup: dict[tuple[str, str], str] = {}

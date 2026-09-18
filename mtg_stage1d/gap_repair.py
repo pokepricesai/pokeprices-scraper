@@ -311,14 +311,19 @@ def run_weekly_repair(
             log.info("gap_repair: %s already source-confirmed for this build; skipping", iso)
             continue
         try:
-            recon = mi.load_reconciliation(
-                mi.default_reconciliation_path(local_gz.parent.parent),
-                mi.load_finish_lookup(supabase) if supabase else {},
-            )
+            if supabase is not None:
+                recon = mi.load_reconciliation_from_db(supabase)
+            else:
+                recon = mi.load_reconciliation(
+                    mi.default_reconciliation_path(local_gz.parent.parent),
+                    {},
+                )
         except FileNotFoundError:
-            # No reconciliation.json — build one on the fly by reading printings map + finishes map.
-            # Falls back to an empty recon which would quarantine everything; we abort instead.
-            log.error("gap_repair: reconciliation.json missing; cannot map UUIDs. Aborting.")
+            log.error("gap_repair: reconciliation source unavailable; cannot map UUIDs. Aborting.")
+            run.errors += 1
+            break
+        except Exception as e:
+            log.error("gap_repair: reconciliation load failed: %s. Aborting.", e)
             run.errors += 1
             break
 
