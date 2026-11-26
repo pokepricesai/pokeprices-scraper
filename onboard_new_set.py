@@ -49,6 +49,8 @@ import time
 from datetime import datetime, timezone
 from typing import Iterable
 
+import requests
+
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -109,6 +111,14 @@ _LISTING_JS_PRICE_RE = re.compile(
 )
 _LISTING_HEADING_RE = re.compile(
     r"<title>(?P<title>[^<]+)</title>",
+    re.IGNORECASE,
+)
+_NEXT_PAGE_FORM_RE = re.compile(
+    r'<form[^>]*class="[^"]*\bnext_page\b[^"]*"[^>]*>(?P<inner>.*?)</form>',
+    re.IGNORECASE | re.DOTALL,
+)
+_HIDDEN_INPUT_RE = re.compile(
+    r'<input[^>]*name="(?P<name>[^"]+)"[^>]*value="(?P<value>[^"]*)"',
     re.IGNORECASE,
 )
 
@@ -190,20 +200,81 @@ def _decode_entities(s: str) -> str:
     return s
 
 
+def parse_next_page_form(html: str) -> dict[str, str] | None:
+    """Return the hidden-input field dict of PriceCharting's "more
+    results" form, or None if the form is absent.
+
+    The form sits directly below the games_table. Its presence signals
+    that further rows exist; its absence signals the listing is complete.
+    Fields observed on 2026-11-26 against pokemon-delta-reign:
+      sort, when, release-date, cursor
+    `cursor` is the number of rows the server has already served — the
+    client POSTs it back verbatim to request the next chunk."""
+    m = _NEXT_PAGE_FORM_RE.search(html)
+    if not m:
+        return None
+    return {
+        im.group("name"): im.group("value")
+        for im in _HIDDEN_INPUT_RE.finditer(m.group("inner"))
+    }
+
+
+def _http_get(url: str) -> str | None:
+    """Thin wrapper over pokeprices_scraper_v8.fetch_card_page so tests
+    can substitute without reaching into the scraper module."""
+    return _scraper.fetch_card_page(url, retries=2, backoff_seconds=1.5)
+
+
+def _http_post(url: str, fields: dict[str, str]) -> str | None:
+    """POST the next-page form with the same retry style as
+    pokeprices_scraper_v8.fetch_card_page: retries on 429 / 5xx /
+    timeout, never retries on 404, 10-second per-request timeout.
+
+    Reuses _scraper.session so the User-Agent, Accept and
+    Accept-Language headers match the nightly scraper byte-for-byte."""
+    max_attempts = 3  # 1 initial + 2 retries, matches fetch_card_page
+    for attempt in range(max_attempts):
+        try:
+            resp = _scraper.session.post(url, data=fields, timeout=10)
+            if resp.status_code == 200:
+                return resp.text
+            if resp.status_code == 404:
+                return None
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+        except requests.exceptions.Timeout:
+            pass
+        except requests.exceptions.RequestException:
+            pass
+        if attempt < max_attempts - 1:
+            time.sleep(1.5 * (attempt + 1))
+    return None
+
+
 def fetch_listing(console_name: str, verbose_log: list[str]) -> list[dict]:
     """Fetch every listing page for the given console and return the
     deduped, document-ordered list of row dicts.
 
-    `verbose_log` is mutated with a line per URL tried so the eventual
-    report can show exactly what was fetched. No DB side effects.
-    """
+    Mechanism (verified against pokemon-delta-reign on 2026-11-26):
+      1. GET /console/<slug> for the first 150 rows.
+      2. Below the games_table the server emits a POST form with
+         class="next_page js-next-page" and hidden inputs {sort, when,
+         release-date, cursor}. The cursor is the row count served so
+         far.
+      3. POSTing those fields to the same URL returns the next chunk —
+         a full HTML page whose games_table holds only the new rows
+         (and may itself carry a next_page form). The loop repeats
+         until the response has no next_page form, adds no new ids,
+         or we hit MAX_LISTING_FETCHES.
+
+    `verbose_log` is mutated with one line per request + a count so the
+    report can show exactly what was fetched. No DB side effects."""
     console_url = build_console_url(console_name)
 
-    def _get(url: str) -> str | None:
-        verbose_log.append(f"GET {url}")
-        return _scraper.fetch_card_page(url, retries=2, backoff_seconds=1.5)
-
-    html = _get(console_url)
+    verbose_log.append(f"GET {console_url}")
+    html = _http_get(console_url)
     if html is None:
         raise RuntimeError(
             f"PriceCharting listing fetch failed for {console_name!r}. "
@@ -220,30 +291,37 @@ def fetch_listing(console_name: str, verbose_log: list[str]) -> list[dict]:
     all_rows: dict[str, dict] = {}
     for row in parse_listing_html(html):
         all_rows[row["pc_id"]] = row
+    verbose_log.append(f"  -> {len(all_rows)} rows (total {len(all_rows)})")
 
-    # Follow pagination if the site ever paginates this listing. PC
-    # currently serves all rows on page 1 and ignores ?page=; we still
-    # probe a couple of extra pages so a future change here is handled
-    # automatically. The loop stops the moment we see no new ids.
+    form = parse_next_page_form(html)
     fetches = 1
-    page = 2
-    prev_count = -1
-    while fetches < MAX_LISTING_FETCHES and prev_count != len(all_rows):
-        prev_count = len(all_rows)
+    while form is not None and fetches < MAX_LISTING_FETCHES:
         time.sleep(LISTING_REQUEST_DELAY)
-        paged_url = f"{console_url}?page={page}"
-        html_page = _get(paged_url)
+        cursor = form.get("cursor", "?")
+        verbose_log.append(f"POST {console_url}  cursor={cursor}")
+        body = _http_post(console_url, form)
         fetches += 1
-        if html_page is None:
+        if body is None:
+            verbose_log.append("  -> no response (retries exhausted); stopping")
             break
         added = 0
-        for row in parse_listing_html(html_page):
+        for row in parse_listing_html(body):
             if row["pc_id"] not in all_rows:
                 all_rows[row["pc_id"]] = row
                 added += 1
+        verbose_log.append(f"  -> +{added} rows (total {len(all_rows)})")
         if added == 0:
+            verbose_log.append("  -> no new ids; stopping")
             break
-        page += 1
+        form = parse_next_page_form(body)
+        if form is None:
+            verbose_log.append("  -> no next_page form; listing complete")
+
+    if form is not None and fetches >= MAX_LISTING_FETCHES:
+        verbose_log.append(
+            f"  WARNING: hit MAX_LISTING_FETCHES={MAX_LISTING_FETCHES} with a "
+            "next_page form still present; returning partial list."
+        )
 
     return list(all_rows.values())
 
@@ -489,6 +567,39 @@ def write_report(path: str, lines: list[str]) -> None:
             f.write(line.rstrip() + "\n")
 
 
+def evaluate_completeness(cls: dict, expected_cards: int | None) -> tuple[bool, list[str]]:
+    """Return (is_incomplete, reasons). A listing is flagged incomplete
+    when either:
+      * --expected-cards was supplied and the count of distinct numeric
+        card numbers is MORE THAN 10% BELOW it, or
+      * there are MORE THAN 10 missing numbers between 1 and the highest
+        card number seen.
+
+    Both checks are side-effect free so the main flow can decide whether
+    to prepend a banner, exit non-zero in --apply, or let
+    --allow-incomplete override."""
+    reasons: list[str] = []
+    distinct = cls.get("distinct_numbers", 0)
+    highest = cls.get("highest_number")
+    missing = cls.get("missing_numbers", [])
+
+    if expected_cards is not None and expected_cards > 0:
+        shortfall_ratio = (expected_cards - distinct) / expected_cards
+        if shortfall_ratio > 0.10:
+            reasons.append(
+                f"distinct card numbers ({distinct}) is {shortfall_ratio*100:.1f}% "
+                f"below --expected-cards ({expected_cards})"
+            )
+
+    if len(missing) > 10:
+        reasons.append(
+            f"{len(missing)} card numbers are missing between 1 and the highest "
+            f"observed number (#{highest})"
+        )
+
+    return (len(reasons) > 0), reasons
+
+
 def _format_classification(cls: dict, printed_total: int | None,
                            expected_cards: int | None) -> list[str]:
     out = []
@@ -548,6 +659,13 @@ def _parse_args(argv=None):
     p.add_argument("--apply", action="store_true",
                    help="Write to pc_csvs/, run the seeder for real, and "
                         "append to the batch file. Default off = dry run.")
+    p.add_argument("--allow-incomplete", action="store_true",
+                   help="Proceed even when the completeness guard would "
+                        "otherwise flag this listing as truncated. In dry "
+                        "run the banner is still shown; with --apply this "
+                        "flag is the only way to seed a listing whose "
+                        "coverage falls short of --expected-cards or has "
+                        "more than 10 gap numbers.")
     return p.parse_args(argv)
 
 
@@ -570,6 +688,10 @@ def main(argv=None) -> int:
     _guard_apply(args)
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    # The banner slot is prepended once classification has run — placed
+    # above every other section so a reviewer scanning only the top of
+    # the report cannot miss an incomplete listing.
+    banner: list[str] = []
     report: list[str] = []
     report.append(f"# onboard_new_set.py report")
     report.append(f"Generated:         {now}")
@@ -593,7 +715,7 @@ def main(argv=None) -> int:
         for l in fetch_log:
             report.append(f"  {l}")
         report.append(f"  ERROR: {e}")
-        write_report(args.report, report)
+        write_report(args.report, banner + report)
         print(f"ERROR: {e}", file=sys.stderr)
         return 3
 
@@ -636,13 +758,33 @@ def main(argv=None) -> int:
         report.append(msg)
     if cls["duplicate_ids"]:
         warnings.append(f"HARD FAIL: duplicate PriceCharting ids: {cls['duplicate_ids']}")
-    if args.expected_cards is not None and cls["distinct_numbers"]:
-        drift = abs(cls["distinct_numbers"] - args.expected_cards)
-        if drift / args.expected_cards > 0.10:
-            warnings.append(
-                f"WARN: distinct card numbers ({cls['distinct_numbers']}) "
-                f"differ from --expected-cards ({args.expected_cards}) by more than 10%."
-            )
+
+    # Completeness guard. Prepend an INCOMPLETE banner to the report
+    # when either --expected-cards is more than 10% short or more than
+    # 10 card numbers are missing between 1 and the highest seen. In
+    # --apply mode this aborts before the seeder unless the operator
+    # has explicitly passed --allow-incomplete.
+    incomplete, incomplete_reasons = evaluate_completeness(cls, args.expected_cards)
+    if incomplete:
+        banner.append("!" * 72)
+        banner.append("!! INCOMPLETE LISTING — PriceCharting did not return a full set of")
+        banner.append("!! rows. Seeding now would create a partially-populated set with")
+        banner.append("!! gaps that the nightly scraper cannot fill on its own (rows must")
+        banner.append("!! exist in pc_csvs/ before the scraper will touch them).")
+        banner.append("!!")
+        for r in incomplete_reasons:
+            banner.append(f"!!   * {r}")
+        banner.append("!!")
+        if args.apply and not args.allow_incomplete:
+            banner.append("!! --apply aborted. Re-run with --allow-incomplete to force seed.")
+        elif args.allow_incomplete:
+            banner.append("!! --allow-incomplete was supplied; proceeding anyway.")
+        else:
+            banner.append("!! Dry-run only: no seeder called with --apply.")
+        banner.append("!" * 72)
+        banner.append("")
+        for r in incomplete_reasons:
+            warnings.append(f"INCOMPLETE: {r}")
 
     if db_env_present():
         report.append("DB cross-check (read-only)")
@@ -675,9 +817,19 @@ def main(argv=None) -> int:
     hard_fail = cls["total"] < 50 or bool(cls["duplicate_ids"])
     if hard_fail:
         report.append("Aborting before seeder due to HARD FAIL above.")
-        write_report(args.report, report)
+        write_report(args.report, banner + report)
         print("HARD FAIL — see report:", args.report, file=sys.stderr)
         return 4
+
+    # Completeness-guard enforcement for --apply.
+    if args.apply and incomplete and not args.allow_incomplete:
+        report.append("Aborting before seeder due to INCOMPLETE listing (see banner).")
+        report.append("Re-run with --allow-incomplete to force seed, or investigate "
+                      "the listing on PriceCharting first.")
+        write_report(args.report, banner + report)
+        print("INCOMPLETE — aborted before seeder. See report:",
+              args.report, file=sys.stderr)
+        return 6
 
     # 5) Seeder dry-run — run it even in apply mode first, for the log
     report.append("seed_set_cards.py --dry-run output")
@@ -704,7 +856,7 @@ def main(argv=None) -> int:
         report.append("--------------------------------")
         report.append(f"(exit code {rc})")
         report.append(out)
-        write_report(args.report, report)
+        write_report(args.report, banner + report)
         if rc != 0:
             print(f"Seeder failed with exit {rc}. See {args.report}.", file=sys.stderr)
             return 5
@@ -738,7 +890,7 @@ def main(argv=None) -> int:
             "card images for the new set populate automatically on the "
             "first night the set is in the batch file."
         )
-        write_report(args.report, report)
+        write_report(args.report, banner + report)
 
     print(f"Report written to {args.report}")
     print(f"CSV written to {csv_path} ({written} rows)")

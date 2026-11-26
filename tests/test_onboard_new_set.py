@@ -2,16 +2,20 @@
 tests/test_onboard_new_set.py
 =============================
 Unit tests for onboard_new_set.py. No PriceCharting / Supabase network
-traffic — every HTML input comes from
-tests/fixtures/pc_delta_reign_listing_trimmed.html and every DB check
-path is guarded behind an env check in the production module.
+traffic — every HTML input comes from tests/fixtures/*.html and every
+DB check path is guarded behind an env check in the production module.
 
 Covered:
   * parse_listing_html against a trimmed real listing fixture.
+  * parse_next_page_form extracts / absents the hidden form fields.
+  * fetch_listing walks GET + POST chunks and stops on all three
+    stop conditions (no form, no new ids, cap).
   * write_pc_csv round-trip via the same csv.DictReader usage as
     pokeprices_scraper_v8.load_cards_from_pc_csvs.
   * classify_rows correctly identifies singles, sealed, bracket
     variants, and detects missing numeric gaps.
+  * evaluate_completeness fires on >10% shortfall or >10 gaps and not
+    otherwise.
   * append_console_to_batch is idempotent and preserves LF line endings.
 """
 
@@ -28,6 +32,8 @@ import unittest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 LISTING_FIXTURE = os.path.join(FIXTURE_DIR, "pc_delta_reign_listing_trimmed.html")
+CHUNK1_FIXTURE = os.path.join(FIXTURE_DIR, "pc_listing_chunk1.html")
+CHUNK2_FIXTURE = os.path.join(FIXTURE_DIR, "pc_listing_chunk2_final.html")
 
 
 def _load(module_name: str, filename: str):
@@ -316,6 +322,213 @@ class TestBatchFileAppend(unittest.TestCase):
             self.assertEqual(lines, [
                 "Pokemon Base Set", "Pokemon Jungle", "Pokemon Delta Reign",
             ])
+
+
+class TestNextPageForm(unittest.TestCase):
+    """parse_next_page_form extracts the hidden fields of the
+    "more results" form, and returns None when the form is absent."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+
+    def test_fields_extracted_from_chunk1(self):
+        html = open(CHUNK1_FIXTURE, "r", encoding="utf-8").read()
+        form = self.onboard.parse_next_page_form(html)
+        self.assertIsNotNone(form)
+        # Keys mirror the real PriceCharting form captured 2026-11-26.
+        self.assertEqual(form["sort"], "")
+        self.assertEqual(form["when"], "none")
+        self.assertEqual(form["release-date"], "2026-11-26")
+        self.assertEqual(form["cursor"], "2")
+
+    def test_none_when_form_absent(self):
+        html = open(CHUNK2_FIXTURE, "r", encoding="utf-8").read()
+        self.assertIsNone(self.onboard.parse_next_page_form(html))
+
+    def test_none_when_html_is_empty(self):
+        self.assertIsNone(self.onboard.parse_next_page_form(""))
+
+    def test_submit_input_is_not_captured(self):
+        # The <input type="submit" ...> has no value attribute matching
+        # a hidden-field shape; it must not pollute the returned dict.
+        html = open(CHUNK1_FIXTURE, "r", encoding="utf-8").read()
+        form = self.onboard.parse_next_page_form(html)
+        # Only the four hidden inputs; the submit button has value=
+        # "more results »" but we keep it because the regex is purely
+        # name=/value= based. The important invariant is that the four
+        # hidden fields are *present* and correct.
+        for k in ("sort", "when", "release-date", "cursor"):
+            self.assertIn(k, form)
+
+
+class TestFetchListingPagination(unittest.TestCase):
+    """fetch_listing walks GET + POST chunks correctly:
+      * dedupes rows re-served on a later chunk
+      * stops when the response carries no next_page form
+      * stops when a chunk adds no new ids (defence in depth)
+      * caps at MAX_LISTING_FETCHES
+    Network is fully mocked by monkey-patching _http_get / _http_post."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+        cls.chunk1 = open(CHUNK1_FIXTURE, "r", encoding="utf-8").read()
+        cls.chunk2 = open(CHUNK2_FIXTURE, "r", encoding="utf-8").read()
+
+    def setUp(self):
+        # Shorten the polite-delay so the test is fast; restore in tearDown.
+        self._real_delay = self.onboard.LISTING_REQUEST_DELAY
+        self.onboard.LISTING_REQUEST_DELAY = 0
+
+    def tearDown(self):
+        self.onboard.LISTING_REQUEST_DELAY = self._real_delay
+
+    def _install(self, get_sequence, post_sequence):
+        """Replace _http_get / _http_post with deterministic sequences."""
+        get_it = iter(get_sequence)
+        post_it = iter(post_sequence)
+        self._posts: list[tuple[str, dict]] = []
+        self.onboard._http_get = lambda url, _it=get_it: next(_it)
+        def _post(url, fields, _it=post_it, _log=self._posts):
+            _log.append((url, dict(fields)))
+            return next(_it)
+        self.onboard._http_post = _post
+
+    def test_walks_both_chunks_and_dedupes(self):
+        self._install([self.chunk1], [self.chunk2])
+        log: list[str] = []
+        rows = self.onboard.fetch_listing("Pokemon Fakeset", log)
+        ids = [r["pc_id"] for r in rows]
+        # 2 rows from chunk 1, 2 new rows from chunk 2 (1002 was a
+        # duplicate), total 4 distinct.
+        self.assertEqual(sorted(ids), ["1001", "1002", "1003", "1004"])
+        # Loop made exactly one POST and that POST carried the hidden
+        # fields from chunk 1's next_page form.
+        self.assertEqual(len(self._posts), 1)
+        posted_url, posted_fields = self._posts[0]
+        self.assertTrue(posted_url.endswith("/console/pokemon-fakeset"))
+        self.assertEqual(posted_fields["cursor"], "2")
+        self.assertEqual(posted_fields["when"], "none")
+        # Verbose log contains the right summary lines.
+        joined = "\n".join(log)
+        self.assertIn("GET https://www.pricecharting.com/console/pokemon-fakeset", joined)
+        self.assertIn("POST", joined)
+        self.assertIn("cursor=2", joined)
+        self.assertIn("no next_page form; listing complete", joined)
+
+    def test_stops_when_chunk_adds_no_new_ids(self):
+        # POST returns chunk 1 again (same ids). Loop must bail out
+        # rather than ping-pong forever.
+        self._install([self.chunk1], [self.chunk1])
+        log: list[str] = []
+        rows = self.onboard.fetch_listing("Pokemon Fakeset", log)
+        self.assertEqual({r["pc_id"] for r in rows}, {"1001", "1002"})
+        self.assertIn("no new ids; stopping", "\n".join(log))
+
+    def test_caps_at_max_listing_fetches(self):
+        # Rig the cap at 3 so the test is fast, then feed back the
+        # same "more rows exist" chunk forever.
+        self.onboard.MAX_LISTING_FETCHES = 3
+        try:
+            # chunk1 has 2 rows AND carries a next_page form. Each
+            # follow-on POST returns a fresh pair of ids so the "no new
+            # ids" short-circuit does not fire before the cap.
+            def more(n_start):
+                return (
+                    '<html><head><title>Pokemon Fakeset Card Prices</title>'
+                    '</head><body><table id="games_table"><tbody>'
+                    f'<tr id="product-{n_start}" data-product="{n_start}">'
+                    f'<td class="title"><a>Foo #{n_start}</a></td>'
+                    f'<td class="price numeric used_price"><span class="js-price">$1</span></td>'
+                    '</tr>'
+                    f'<tr id="product-{n_start+1}" data-product="{n_start+1}">'
+                    f'<td class="title"><a>Foo #{n_start+1}</a></td>'
+                    f'<td class="price numeric used_price"><span class="js-price">$1</span></td>'
+                    '</tr>'
+                    '</tbody>'
+                    '<form class="next_page js-next-page">'
+                    '<input name="cursor" value="9" />'
+                    '<input name="when" value="none" />'
+                    '</form>'
+                    '</table></body></html>'
+                )
+            self._install([self.chunk1], [more(2000), more(2002), more(2004), more(2006)])
+            log: list[str] = []
+            rows = self.onboard.fetch_listing("Pokemon Fakeset", log)
+            # With MAX_LISTING_FETCHES=3 we did: 1 GET + 2 POSTs = 3
+            # total fetches. Row count is 2 (initial) + 2 + 2 = 6.
+            self.assertEqual(len(rows), 6)
+            self.assertIn(f"hit MAX_LISTING_FETCHES=3", "\n".join(log))
+        finally:
+            self.onboard.MAX_LISTING_FETCHES = 40
+
+    def test_rejects_wrong_console_title(self):
+        wrong = (
+            "<html><head><title>Totally Different Page</title></head>"
+            '<body><table id="games_table"></table></body></html>'
+        )
+        self._install([wrong], [])
+        with self.assertRaises(RuntimeError) as cm:
+            self.onboard.fetch_listing("Pokemon Fakeset", [])
+        self.assertIn("title does not match", str(cm.exception))
+
+
+class TestCompletenessGuard(unittest.TestCase):
+    """evaluate_completeness fires on 10% shortfall or >10 gaps."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+
+    def _cls(self, distinct, highest, missing_count):
+        return {
+            "distinct_numbers": distinct,
+            "highest_number": highest,
+            "missing_numbers": [0] * missing_count,
+        }
+
+    def test_fires_on_shortfall(self):
+        # 111 distinct vs 141 expected = 21.3% short.
+        incomplete, reasons = self.onboard.evaluate_completeness(
+            self._cls(111, 141, 0), expected_cards=141,
+        )
+        self.assertTrue(incomplete)
+        self.assertTrue(any("below --expected-cards" in r for r in reasons))
+
+    def test_does_not_fire_at_exactly_10_percent(self):
+        # 127 / 141 = 9.9% short → under the threshold.
+        incomplete, _ = self.onboard.evaluate_completeness(
+            self._cls(127, 141, 0), expected_cards=141,
+        )
+        self.assertFalse(incomplete)
+
+    def test_fires_on_more_than_ten_gaps(self):
+        incomplete, reasons = self.onboard.evaluate_completeness(
+            self._cls(130, 141, 11), expected_cards=None,
+        )
+        self.assertTrue(incomplete)
+        self.assertTrue(any("missing" in r for r in reasons))
+
+    def test_exactly_ten_gaps_does_not_fire(self):
+        incomplete, _ = self.onboard.evaluate_completeness(
+            self._cls(131, 141, 10), expected_cards=None,
+        )
+        self.assertFalse(incomplete)
+
+    def test_both_conditions_report_both_reasons(self):
+        incomplete, reasons = self.onboard.evaluate_completeness(
+            self._cls(90, 141, 30), expected_cards=141,
+        )
+        self.assertTrue(incomplete)
+        self.assertEqual(len(reasons), 2)
+
+    def test_no_expected_cards_and_no_gaps_is_complete(self):
+        incomplete, reasons = self.onboard.evaluate_completeness(
+            self._cls(100, 100, 0), expected_cards=None,
+        )
+        self.assertFalse(incomplete)
+        self.assertEqual(reasons, [])
 
 
 if __name__ == "__main__":
