@@ -30,3 +30,8 @@ jungle.txt
 # Local environment
 .env
 .env.local
+
+# onboard_new_set.py dry-run output and reports
+.onboard_tmp/
+onboard-dry-run-*.txt
+onboard-diff.txt

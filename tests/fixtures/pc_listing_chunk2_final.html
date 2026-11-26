@@ -1,0 +1,31 @@
+<!doctype html>
+<!--
+Trimmed second (final) chunk. Mirrors the shape of the real response
+returned by POSTing the next_page form against the Delta Reign listing:
+a full <!DOCTYPE html>, the right <title>, a games_table with only the
+new rows, and NO next_page form — which is how the server signals
+"listing complete".
+
+Includes id 1002 to prove the loop dedupes a row the server re-sends.
+-->
+<html>
+<head><title>Pokemon Fakeset Card Prices | Holo, Rare, &amp; Graded Cards</title></head>
+<body>
+<table id="games_table">
+<tbody>
+<tr id="product-1002" data-product="1002">
+    <td class="title"><a href="/game/pokemon-fakeset/bar-2">Bar #2</a></td>
+    <td class="price numeric used_price"><span class="js-price">$2.00</span></td>
+</tr>
+<tr id="product-1003" data-product="1003">
+    <td class="title"><a href="/game/pokemon-fakeset/baz-3">Baz #3</a></td>
+    <td class="price numeric used_price"><span class="js-price">$3.00</span></td>
+</tr>
+<tr id="product-1004" data-product="1004">
+    <td class="title"><a href="/game/pokemon-fakeset/booster-box">Booster Box</a></td>
+    <td class="price numeric used_price"><span class="js-price">$120.00</span></td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

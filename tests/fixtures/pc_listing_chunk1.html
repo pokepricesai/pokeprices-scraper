@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+Trimmed first chunk used by tests/test_onboard_new_set.py to exercise
+the POST-based pagination in fetch_listing(). Shape mirrors the real
+pokemon-delta-reign first page captured 2026-11-26:
+  * valid <title>
+  * games_table with 2 product rows (ids 1001, 1002)
+  * a <form class="next_page js-next-page"> with cursor=2 — the
+    presence of this form is what tells fetch_listing() there are more
+    rows to fetch.
+-->
+<html>
+<head><title>Pokemon Fakeset Card Prices | Holo, Rare, &amp; Graded Cards</title></head>
+<body>
+<table id="games_table">
+<tbody>
+<tr id="product-1001" data-product="1001">
+    <td class="title"><a href="/game/pokemon-fakeset/foo-1">Foo #1</a></td>
+    <td class="price numeric used_price"><span class="js-price">$1.00</span></td>
+</tr>
+<tr id="product-1002" data-product="1002">
+    <td class="title"><a href="/game/pokemon-fakeset/bar-2">Bar #2</a></td>
+    <td class="price numeric used_price"><span class="js-price">$2.00</span></td>
+</tr>
+</tbody>
+<form method="POST" action="" class="next_page js-next-page">
+    <input type="hidden" name="sort" value="" />
+    <input type="hidden" name="when" value="none" />
+    <input type="hidden" name="release-date" value="2026-11-26" />
+    <input type="hidden" name="cursor" value="2" />
+    <input type="submit" value="more results &raquo;" />
+</form>
+</table>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<!--
+Trimmed fixture used by tests/test_onboard_new_set.py.
+Only the pieces onboard_new_set parses are retained:
+  * <title> containing the console name (used to validate the page)
+  * three <tr id="product-ID" data-product="ID"> rows mirroring the
+    real games_table rows at
+    https://www.pricecharting.com/console/pokemon-delta-reign
+  * one price row deliberately has an empty <span class="js-price"></span>
+    to exercise the missing-price branch of the parser.
+-->
+<html>
+<head><title>Pokemon Delta Reign Card Prices | Holo, Rare, &amp; Graded Cards</title></head>
+<body>
+<table id="games_table">
+<tbody>
+<tr id="product-15000221" data-product="15000221">
+    <td class="image"><div><a href="https://www.pricecharting.com/game/pokemon-delta-reign/mega-rayquaza-ex-138"><img class="photo" src="x.jpg"/></a></div></td>
+    <td class="title" title="15000221">
+        <a href="/game/pokemon-delta-reign/mega-rayquaza-ex-138">Mega Rayquaza ex #138</a>
+    </td>
+    <td class="price numeric used_price">
+        <span class="js-price">$279.71</span>
+    </td>
+    <td class="price numeric cib_price"><span class="js-price">$623.00</span></td>
+    <td class="price numeric new_price"><span class="js-price">$1,741.74</span></td>
+</tr>
+<tr id="product-15000222" data-product="15000222">
+    <td class="image"><div><a href="https://www.pricecharting.com/game/pokemon-delta-reign/booster-box"><img class="photo" src="x.jpg"/></a></div></td>
+    <td class="title" title="15000222">
+        <a href="/game/pokemon-delta-reign/booster-box">Booster Box</a>
+    </td>
+    <td class="price numeric used_price">
+        <span class="js-price">$139.99</span>
+    </td>
+    <td class="price numeric cib_price"><span class="js-price">$160.00</span></td>
+    <td class="price numeric new_price"><span class="js-price">$180.00</span></td>
+</tr>
+<tr id="product-15000223" data-product="15000223">
+    <td class="image"><div><a href="https://www.pricecharting.com/game/pokemon-delta-reign/pikachu-25-reverse-holo"><img class="photo" src="x.jpg"/></a></div></td>
+    <td class="title" title="15000223">
+        <a href="/game/pokemon-delta-reign/pikachu-25-reverse-holo">Pikachu [Reverse Holo] #25</a>
+    </td>
+    <td class="price numeric used_price">
+        <span class="js-price"></span>
+    </td>
+    <td class="price numeric cib_price"><span class="js-price">$0.40</span></td>
+    <td class="price numeric new_price"><span class="js-price">$0.50</span></td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

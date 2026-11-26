@@ -1,0 +1,165 @@
+name: Onboard New Set
+
+# Replaces the manual "download the CSV, run the seeder, edit batch6.txt"
+# flow previously used for e.g. the 30th Celebration import. The job is
+# gated by workflow_dispatch so it never runs on a schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      console_name:
+        description: 'PriceCharting console name (e.g. "Pokemon Delta Reign")'
+        required: true
+        type: string
+      set_name:
+        description: 'DB set_name without the "Pokemon " prefix (e.g. "Delta Reign")'
+        required: true
+        type: string
+      release_date:
+        description: 'Release date YYYY-MM-DD'
+        required: true
+        type: string
+      printed_total:
+        description: 'Printed denominator (what appears on the cards, e.g. 103)'
+        required: true
+        type: string
+      language:
+        description: 'Card language'
+        required: false
+        default: 'en'
+        type: choice
+        options: [en, jp]
+      expected_cards:
+        description: 'Optional: expected full card count including secret rares'
+        required: false
+        type: string
+      tcg_set_code:
+        description: 'Optional: TCG set code for the DB cross-check (e.g. me6)'
+        required: false
+        type: string
+      apply:
+        description: 'Apply changes: write the CSV, run the seeder for real, commit and push. Leave unchecked for a dry-run artifact only.'
+        required: false
+        default: false
+        type: boolean
+      allow_incomplete:
+        description: 'Override the completeness guard. Leave off unless the listing is known to be short (brand-new set pre-release).'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+# No two onboard runs ever overlap. If a second run is kicked off while
+# the first is still working, it queues behind the first — matches the
+# "cancel-in-progress: false" policy used by nightly-scrape.
+concurrency:
+  group: onboard-new-set
+  cancel-in-progress: false
+
+jobs:
+  onboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      # All user-supplied inputs are passed through env: into the shell
+      # scripts below. We never splice ${{ inputs.* }} directly into
+      # the `run:` body — that would execute attacker-controlled input
+      # as shell. Shell variables are always double-quoted when used.
+      - name: Run onboarding script
+        id: onboard
+        env:
+          INPUT_CONSOLE_NAME: ${{ inputs.console_name }}
+          INPUT_SET_NAME: ${{ inputs.set_name }}
+          INPUT_RELEASE_DATE: ${{ inputs.release_date }}
+          INPUT_PRINTED_TOTAL: ${{ inputs.printed_total }}
+          INPUT_LANGUAGE: ${{ inputs.language }}
+          INPUT_EXPECTED_CARDS: ${{ inputs.expected_cards }}
+          INPUT_TCG_SET_CODE: ${{ inputs.tcg_set_code }}
+          INPUT_APPLY: ${{ inputs.apply }}
+          INPUT_ALLOW_INCOMPLETE: ${{ inputs.allow_incomplete }}
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --console       "$INPUT_CONSOLE_NAME"
+            --set-name      "$INPUT_SET_NAME"
+            --release-date  "$INPUT_RELEASE_DATE"
+            --printed-total "$INPUT_PRINTED_TOTAL"
+            --language      "$INPUT_LANGUAGE"
+            --report        onboard-report.txt
+          )
+          if [ -n "$INPUT_EXPECTED_CARDS" ]; then
+            ARGS+=(--expected-cards "$INPUT_EXPECTED_CARDS")
+          fi
+          if [ -n "$INPUT_TCG_SET_CODE" ]; then
+            ARGS+=(--tcg-set-code "$INPUT_TCG_SET_CODE")
+          fi
+          if [ "$INPUT_APPLY" = "true" ]; then
+            ARGS+=(--apply)
+          fi
+          if [ "$INPUT_ALLOW_INCOMPLETE" = "true" ]; then
+            ARGS+=(--allow-incomplete)
+          fi
+          python onboard_new_set.py "${ARGS[@]}"
+
+      # Narrow the artifact glob so we upload only the one CSV this run
+      # produced — the earlier wildcard pc_csvs/Pokemon*.csv would have
+      # uploaded every pre-existing set's CSV, which is noise.
+      - name: Upload report + CSV artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        env:
+          INPUT_CONSOLE_NAME: ${{ inputs.console_name }}
+          INPUT_SET_NAME: ${{ inputs.set_name }}
+          INPUT_APPLY: ${{ inputs.apply }}
+        with:
+          name: onboard-${{ inputs.set_name }}
+          path: |
+            onboard-report.txt
+            .onboard_tmp/${{ inputs.console_name }}.csv
+            pc_csvs/${{ inputs.console_name }}.csv
+          if-no-files-found: ignore
+
+      - name: Commit and push (apply mode only)
+        if: ${{ inputs.apply == true || inputs.apply == 'true' }}
+        env:
+          INPUT_CONSOLE_NAME: ${{ inputs.console_name }}
+          INPUT_SET_NAME: ${{ inputs.set_name }}
+          INPUT_RELEASE_DATE: ${{ inputs.release_date }}
+          BRANCH_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          CSV_PATH="pc_csvs/${INPUT_CONSOLE_NAME}.csv"
+          BATCH_FILE="batches/batch6.txt"
+
+          # Stage ONLY the two files this job may have changed — never
+          # use `git add .` so a stray artifact cannot leak into the
+          # commit.
+          git add -- "$CSV_PATH" "$BATCH_FILE"
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — CSV and batch file are already up to date."
+            exit 0
+          fi
+
+          git commit -m "Onboard ${INPUT_SET_NAME} (release ${INPUT_RELEASE_DATE})"
+          git push origin "HEAD:${BRANCH_REF}"
