@@ -69,6 +69,13 @@ import re
 import sys
 import requests
 
+from set_classifier import (
+    SEALED_KEYWORDS,
+    _SEALED_PATTERNS,
+    extract_card_number,
+    is_sealed_by_name,
+)
+
 SUPABASE_URL = "https://egidpsrkqvymvioidatc.supabase.co"
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
@@ -83,16 +90,6 @@ CLASSIC_COLLECTION_MAX_ID = 14470836
 # Retailer / product variants (3 rows immediately after CC).
 RETAILER_VARIANT_IDS = {14470837, 14470838, 14470839}
 
-# Word-boundary sealed keywords. Substring "tin" would catch "Victini";
-# word-boundary "\btin\b" catches only real Tin products. "deck" is
-# included to catch Battle Deck: Espeon ex / Battle Deck: Umbreon ex.
-SEALED_KEYWORDS = [
-    "booster", "pack", "box", "blister", "bundle",
-    "collection", "tin", "etb", "elite trainer",
-    "build & battle", "build and battle", "case", "display", "deck",
-]
-_SEALED_PATTERNS = [re.compile(rf"\b{re.escape(kw)}\b", re.IGNORECASE) for kw in SEALED_KEYWORDS]
-
 
 def make_url_slug(text):
     slug = text.lower()
@@ -102,21 +99,6 @@ def make_url_slug(text):
     slug = re.sub(r"\s+", "-", slug)
     slug = re.sub(r"-+", "-", slug)
     return slug
-
-
-def extract_card_number(product_name):
-    match = re.search(r"#(\w+)", product_name)
-    return match.group(1) if match else None
-
-
-def is_sealed_by_name(product_name):
-    """Word-boundary keyword match. Only consulted for rows that do NOT
-    have a #NN suffix (any product with a card number is a card, not a
-    sealed product)."""
-    for pat in _SEALED_PATTERNS:
-        if pat.search(product_name):
-            return True
-    return False
 
 
 def classify(pc_id_str, product_name):
