@@ -99,9 +99,12 @@ _LISTING_NAME_RE = re.compile(
     r"<td\s+class=\"title\"[^>]*>\s*<a[^>]*>(?P<name>[^<]+)</a>",
     re.IGNORECASE | re.DOTALL,
 )
-_LISTING_LOOSE_RE = re.compile(
-    r"<td\s+class=\"price\s+numeric\s+used_price\"[^>]*>\s*(?:<[^>]+>\s*)*"
-    r"<span\s+class=\"js-price\"[^>]*>\s*(?P<price>[^<]*?)\s*</span>",
+_LISTING_LOOSE_TD_RE = re.compile(
+    r"<td\s+class=\"price\s+numeric\s+used_price\"[^>]*>(?P<inner>.*?)</td>",
+    re.IGNORECASE | re.DOTALL,
+)
+_LISTING_JS_PRICE_RE = re.compile(
+    r"<span\s+class=\"js-price\"[^>]*>(?P<price>.*?)</span>",
     re.IGNORECASE | re.DOTALL,
 )
 _LISTING_HEADING_RE = re.compile(
@@ -153,13 +156,15 @@ def parse_listing_html(html: str) -> list[dict]:
         name = _decode_entities(name_m.group("name")).strip()
         if not name:
             continue
-        price_m = _LISTING_LOOSE_RE.search(body)
         price = ""
-        if price_m:
-            raw = price_m.group("price").strip()
-            # PriceCharting uses "&nbsp;" / nothing for missing prices.
-            if raw and raw not in ("-", "—", "N/A"):
-                price = _decode_entities(raw)
+        td_m = _LISTING_LOOSE_TD_RE.search(body)
+        if td_m:
+            span_m = _LISTING_JS_PRICE_RE.search(td_m.group("inner"))
+            if span_m:
+                raw = span_m.group("price").strip()
+                # PriceCharting uses "&nbsp;" / nothing for missing prices.
+                if raw and raw not in ("-", "—", "N/A"):
+                    price = _decode_entities(raw)
         rows.append({
             "pc_id": match.group("pc_id"),
             "product_name": name,
