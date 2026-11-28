@@ -47,6 +47,10 @@ on:
         required: false
         default: false
         type: boolean
+      min_rows:
+        description: 'Hard-fail threshold for the row-count sanity check. Default 50. Lower (e.g. 10) for small official promo sets such as McDonald''s. Must be at least 5.'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -94,6 +98,7 @@ jobs:
           INPUT_TCG_SET_CODE: ${{ inputs.tcg_set_code }}
           INPUT_APPLY: ${{ inputs.apply }}
           INPUT_ALLOW_INCOMPLETE: ${{ inputs.allow_incomplete }}
+          INPUT_MIN_ROWS: ${{ inputs.min_rows }}
         run: |
           set -euo pipefail
           ARGS=(
@@ -115,6 +120,9 @@ jobs:
           fi
           if [ "$INPUT_ALLOW_INCOMPLETE" = "true" ]; then
             ARGS+=(--allow-incomplete)
+          fi
+          if [ -n "$INPUT_MIN_ROWS" ]; then
+            ARGS+=(--min-rows "$INPUT_MIN_ROWS")
           fi
           python onboard_new_set.py "${ARGS[@]}"
 

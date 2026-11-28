@@ -580,91 +580,334 @@ class TestLanguageNameConsistency(unittest.TestCase):
 
 class TestChooseBatchFile(unittest.TestCase):
     """choose_batch_file picks the right file per --language and
-    tie-breaks consistently."""
+    tie-breaks consistently. All returned paths are repo-relative
+    with forward slashes so the workflow commit step and the
+    GITHUB_OUTPUT emission agree on exactly one shape."""
 
     @classmethod
     def setUpClass(cls):
         cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
 
-    def _batches_dir(self, tmp: str, counts: dict[str, int]) -> str:
-        """Build a batches/ directory with the given per-file non-empty
-        line counts."""
+    def _repo_root(self, tmp: str, counts: dict[str, int]) -> str:
+        """Build a repo-root-like `tmp/batches/` directory with the
+        given per-file non-empty line counts. Returns `tmp` (which
+        becomes the repo_root argument for choose_batch_file)."""
         d = os.path.join(tmp, "batches")
         os.mkdir(d)
         for filename, n in counts.items():
             with open(os.path.join(d, filename), "w", encoding="utf-8", newline="\n") as f:
                 for i in range(n):
                     f.write(f"Pokemon Dummy {i}\n")
-        return d
+        return tmp
 
     def test_explicit_batch_file_always_wins(self):
         with tempfile.TemporaryDirectory() as tmp:
-            d = self._batches_dir(tmp, {"batch6.txt": 1,
-                                        "batch-japanese-1.txt": 1,
-                                        "batch-japanese-2.txt": 1})
+            r = self._repo_root(tmp, {"batch6.txt": 1,
+                                       "batch-japanese-1.txt": 1,
+                                       "batch-japanese-2.txt": 1})
             self.assertEqual(
-                self.onboard.choose_batch_file("jp", d, explicit="batches/custom.txt"),
+                self.onboard.choose_batch_file("jp", r, explicit="batches/custom.txt"),
                 "batches/custom.txt",
             )
 
+    def test_explicit_absolute_path_is_normalised(self):
+        # When a caller passes an absolute path under repo_root, the
+        # function must normalise it back to repo-relative forward
+        # slashes so the GITHUB_OUTPUT line is always one shape.
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._repo_root(tmp, {"batch6.txt": 1})
+            abs_path = os.path.join(r, "batches", "batch6.txt")
+            got = self.onboard.choose_batch_file("en", r, explicit=abs_path)
+            self.assertEqual(got, "batches/batch6.txt")
+
     def test_english_always_picks_batch6(self):
         with tempfile.TemporaryDirectory() as tmp:
-            d = self._batches_dir(tmp, {"batch6.txt": 10,
-                                        "batch-japanese-1.txt": 0})
-            chosen = self.onboard.choose_batch_file("en", d, None)
-            self.assertTrue(chosen.endswith("batch6.txt"))
+            r = self._repo_root(tmp, {"batch6.txt": 10,
+                                       "batch-japanese-1.txt": 0})
+            chosen = self.onboard.choose_batch_file("en", r, None)
+            self.assertEqual(chosen, "batches/batch6.txt")
 
     def test_japanese_picks_least_populated(self):
         with tempfile.TemporaryDirectory() as tmp:
-            d = self._batches_dir(tmp, {
+            r = self._repo_root(tmp, {
                 "batch-japanese-1.txt": 20,
                 "batch-japanese-2.txt": 5,   # smallest
                 "batch-japanese-3.txt": 10,
                 "batch-japanese-4.txt": 15,
                 "batch-japanese-5.txt": 25,
             })
-            chosen = self.onboard.choose_batch_file("jp", d, None)
-            self.assertTrue(chosen.endswith("batch-japanese-2.txt"))
+            chosen = self.onboard.choose_batch_file("jp", r, None)
+            self.assertEqual(chosen, "batches/batch-japanese-2.txt")
 
     def test_japanese_tie_breaks_on_lowest_number(self):
         with tempfile.TemporaryDirectory() as tmp:
-            d = self._batches_dir(tmp, {
+            r = self._repo_root(tmp, {
                 "batch-japanese-1.txt": 7,
                 "batch-japanese-2.txt": 7,
                 "batch-japanese-3.txt": 7,
             })
-            chosen = self.onboard.choose_batch_file("jp", d, None)
-            self.assertTrue(chosen.endswith("batch-japanese-1.txt"))
+            chosen = self.onboard.choose_batch_file("jp", r, None)
+            self.assertEqual(chosen, "batches/batch-japanese-1.txt")
 
     def test_japanese_ignores_english_batch_files(self):
         # A badly-named "batch6.txt" with zero lines must not win —
         # routing must stay inside the Japanese pipeline.
         with tempfile.TemporaryDirectory() as tmp:
-            d = self._batches_dir(tmp, {
+            r = self._repo_root(tmp, {
                 "batch6.txt": 0,
                 "batch-japanese-1.txt": 999,
             })
-            chosen = self.onboard.choose_batch_file("jp", d, None)
-            self.assertTrue(chosen.endswith("batch-japanese-1.txt"))
+            chosen = self.onboard.choose_batch_file("jp", r, None)
+            self.assertEqual(chosen, "batches/batch-japanese-1.txt")
 
     def test_raises_when_no_japanese_batches_exist(self):
         with tempfile.TemporaryDirectory() as tmp:
-            d = self._batches_dir(tmp, {"batch6.txt": 1})
+            r = self._repo_root(tmp, {"batch6.txt": 1})
             with self.assertRaises(FileNotFoundError):
-                self.onboard.choose_batch_file("jp", d, None)
+                self.onboard.choose_batch_file("jp", r, None)
 
     def test_blank_lines_are_not_counted(self):
         with tempfile.TemporaryDirectory() as tmp:
-            d = os.path.join(tmp, "batches")
-            os.mkdir(d)
-            # File A: 2 content lines + several blanks (count = 2).
-            # File B: 3 content lines, no blanks (count = 3).
-            with open(os.path.join(d, "batch-japanese-1.txt"), "w", newline="\n") as f:
+            r = tmp
+            os.mkdir(os.path.join(r, "batches"))
+            with open(os.path.join(r, "batches", "batch-japanese-1.txt"), "w",
+                      newline="\n") as f:
+                # File A: 2 content lines + several blanks (count = 2).
                 f.write("Pokemon A\n\n\nPokemon B\n\n")
-            with open(os.path.join(d, "batch-japanese-2.txt"), "w", newline="\n") as f:
+            with open(os.path.join(r, "batches", "batch-japanese-2.txt"), "w",
+                      newline="\n") as f:
+                # File B: 3 content lines, no blanks (count = 3).
                 f.write("Pokemon C\nPokemon D\nPokemon E\n")
-            chosen = self.onboard.choose_batch_file("jp", d, None)
-            self.assertTrue(chosen.endswith("batch-japanese-1.txt"))
+            chosen = self.onboard.choose_batch_file("jp", r, None)
+            self.assertEqual(chosen, "batches/batch-japanese-1.txt")
+
+
+class TestBatchPathValidation(unittest.TestCase):
+    """validate_repo_relative_batch_path matches the workflow's own
+    regex, and validate_explicit_batch_matches_language keeps en and
+    jp pipelines from crossing wires."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+
+    def test_repo_relative_pattern_accepts_good_paths(self):
+        for good in ("batches/batch6.txt", "batches/batch-japanese-1.txt",
+                     "batches/batch2a.txt"):
+            self.onboard.validate_repo_relative_batch_path(good)
+
+    def test_repo_relative_pattern_rejects_absolute(self):
+        with self.assertRaises(ValueError):
+            self.onboard.validate_repo_relative_batch_path(
+                "/home/runner/work/pokeprices/batches/batch6.txt"
+            )
+
+    def test_repo_relative_pattern_rejects_parent_traversal(self):
+        with self.assertRaises(ValueError):
+            self.onboard.validate_repo_relative_batch_path(
+                "../batches/batch6.txt"
+            )
+        with self.assertRaises(ValueError):
+            self.onboard.validate_repo_relative_batch_path(
+                "batches/../etc/passwd"
+            )
+
+    def test_repo_relative_pattern_rejects_spaces(self):
+        # Spaces are not in the character class; a stray " " in a
+        # filename must stop the commit step reaching the push.
+        with self.assertRaises(ValueError):
+            self.onboard.validate_repo_relative_batch_path(
+                "batches/batch 6.txt"
+            )
+
+    def test_repo_relative_pattern_rejects_missing_dir_prefix(self):
+        with self.assertRaises(ValueError):
+            self.onboard.validate_repo_relative_batch_path("batch6.txt")
+
+    def test_repo_relative_pattern_rejects_backslashes(self):
+        # Windows-shaped paths must be normalised before validation.
+        with self.assertRaises(ValueError):
+            self.onboard.validate_repo_relative_batch_path("batches\\batch6.txt")
+
+    def test_en_batch_file_refused_when_language_jp(self):
+        with self.assertRaises(ValueError):
+            self.onboard.validate_explicit_batch_matches_language(
+                "jp", "batches/batch6.txt",
+            )
+
+    def test_jp_batch_file_refused_when_language_en(self):
+        with self.assertRaises(ValueError):
+            self.onboard.validate_explicit_batch_matches_language(
+                "en", "batches/batch-japanese-1.txt",
+            )
+
+    def test_matching_language_accepts(self):
+        # No exception for the right pairings.
+        self.onboard.validate_explicit_batch_matches_language(
+            "en", "batches/batch6.txt",
+        )
+        self.onboard.validate_explicit_batch_matches_language(
+            "jp", "batches/batch-japanese-3.txt",
+        )
+
+
+class TestGithubOutputEmission(unittest.TestCase):
+    """main() emits exactly one repo-relative forward-slash path to
+    GITHUB_OUTPUT, before any PriceCharting request. The test fakes
+    _http_get so it raises immediately — proving the emission happens
+    first — and then inspects the GITHUB_OUTPUT file.
+
+    Both --language en and --language jp are exercised against the
+    repo's own batches/ folder so the output line is byte-identical to
+    what the live CI job will emit."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+
+    def setUp(self):
+        self._saved = self.onboard._http_get
+        # Make any PriceCharting fetch an instant failure so we can
+        # prove the GITHUB_OUTPUT line was written *before* fetch.
+        def _fail(url, *a, **kw):
+            raise AssertionError(f"_http_get must not be called before "
+                                 f"the GITHUB_OUTPUT line is emitted; "
+                                 f"got {url!r}")
+        self.onboard._http_get = _fail
+
+    def tearDown(self):
+        self.onboard._http_get = self._saved
+
+    def _call_main(self, argv: list[str], gh_output_path: str) -> int:
+        old = os.environ.get("GITHUB_OUTPUT")
+        os.environ["GITHUB_OUTPUT"] = gh_output_path
+        try:
+            try:
+                return self.onboard.main(argv) or 0
+            except AssertionError:
+                # fetch raised — expected, we only care about the file.
+                return -1
+        finally:
+            if old is None:
+                os.environ.pop("GITHUB_OUTPUT", None)
+            else:
+                os.environ["GITHUB_OUTPUT"] = old
+
+    def test_en_emits_batches_batch6_txt_exactly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gh = os.path.join(tmp, "github_output")
+            rc = self._call_main([
+                "--console", "Pokemon Delta Reign",
+                "--set-name", "Delta Reign",
+                "--release-date", "2026-11-06",
+                "--printed-total", "103",
+                "--language", "en",
+                "--report", os.path.join(tmp, "report.txt"),
+            ], gh)
+            self.assertIn(rc, (-1, 3))  # fetch raised or returned 3
+            lines = open(gh, "r", encoding="utf-8").read().splitlines()
+            self.assertEqual(lines, ["batch_file=batches/batch6.txt"])
+            self.assertRegex(
+                lines[0].split("=", 1)[1],
+                r"^batches/[A-Za-z0-9._-]+\.txt$",
+            )
+
+    def test_jp_emits_a_matching_jp_batch_exactly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gh = os.path.join(tmp, "github_output")
+            rc = self._call_main([
+                "--console", "Pokemon Japanese Storm Emeralda",
+                "--set-name", "Japanese Storm Emeralda",
+                "--release-date", "2026-07-31",
+                "--printed-total", "76",
+                "--language", "jp",
+                "--report", os.path.join(tmp, "report.txt"),
+            ], gh)
+            self.assertIn(rc, (-1, 3))
+            lines = open(gh, "r", encoding="utf-8").read().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertRegex(
+                lines[0],
+                r"^batch_file=batches/batch-japanese-\d+\.txt$",
+            )
+
+    def test_absolute_explicit_path_outside_repo_is_refused(self):
+        # An absolute path that is not under the repo root cannot be
+        # normalised — it must be refused before anything else runs.
+        with tempfile.TemporaryDirectory() as tmp:
+            gh = os.path.join(tmp, "github_output")
+            open(gh, "w").close()
+            rc = self._call_main([
+                "--console", "Pokemon Delta Reign",
+                "--set-name", "Delta Reign",
+                "--release-date", "2026-11-06",
+                "--printed-total", "103",
+                "--language", "en",
+                "--report", os.path.join(tmp, "report.txt"),
+                "--batch-file", "/tmp/evil.txt",
+                "--apply",
+            ], gh)
+            self.assertEqual(rc, 7)
+
+    def test_parent_traversal_batch_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gh = os.path.join(tmp, "github_output")
+            open(gh, "w").close()
+            rc = self._call_main([
+                "--console", "Pokemon Delta Reign",
+                "--set-name", "Delta Reign",
+                "--release-date", "2026-11-06",
+                "--printed-total", "103",
+                "--language", "en",
+                "--report", os.path.join(tmp, "report.txt"),
+                "--batch-file", "../batches/batch6.txt",
+                "--apply",
+            ], gh)
+            self.assertEqual(rc, 7)
+
+
+class TestMinRowsArg(unittest.TestCase):
+    """--min-rows plumbs through to the hard-fail check. 5 is the
+    smallest value accepted; the default is 50."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+
+    def test_default_is_50(self):
+        args = self.onboard._parse_args([
+            "--console", "Pokemon X",
+            "--set-name", "X",
+            "--release-date", "2026-01-01",
+            "--printed-total", "1",
+            "--report", "r.txt",
+        ])
+        self.assertEqual(args.min_rows, 50)
+
+    def test_lower_value_is_accepted(self):
+        args = self.onboard._parse_args([
+            "--console", "Pokemon X",
+            "--set-name", "X",
+            "--release-date", "2026-01-01",
+            "--printed-total", "1",
+            "--min-rows", "10",
+            "--report", "r.txt",
+        ])
+        self.assertEqual(args.min_rows, 10)
+
+    def test_floor_at_5_is_enforced_by_main(self):
+        # The argparse layer accepts any integer; main() rejects < 5.
+        argv = [
+            "--console", "Pokemon X",
+            "--set-name", "X",
+            "--release-date", "2026-01-01",
+            "--printed-total", "1",
+            "--min-rows", "4",
+            "--language", "en",
+            "--report", "whatever.txt",
+        ]
+        rc = self.onboard.main(argv)
+        self.assertEqual(rc, 7)
 
 
 if __name__ == "__main__":
