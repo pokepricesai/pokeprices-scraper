@@ -650,7 +650,13 @@ def _parse_args(argv=None):
                    help="Optional full card count including secret rares.")
     p.add_argument("--tcg-set-code", default=None,
                    help="Optional TCG set code for the DB cross-check.")
-    p.add_argument("--batch-file", default=os.path.join("batches", "batch6.txt"))
+    p.add_argument("--batch-file", default=None,
+                   help="Batch file to append to with --apply. When omitted, "
+                        "the choice depends on --language: 'en' uses "
+                        "batches/batch6.txt; 'jp' picks the "
+                        "batches/batch-japanese-*.txt with the fewest "
+                        "non-empty lines (tie: lowest numeric suffix). An "
+                        "explicit value always wins.")
     p.add_argument("--out-dir", default="pc_csvs",
                    help="Where to write the generated CSV. In dry-run mode "
                         "a git-ignored temp folder is used instead.")
@@ -669,6 +675,84 @@ def _parse_args(argv=None):
     return p.parse_args(argv)
 
 
+def validate_language_name_consistency(language: str, console: str,
+                                        set_name: str) -> None:
+    """Refuse a mislabelled onboarding before any PriceCharting request:
+      * --language jp requires console starting with "Pokemon Japanese "
+        AND --set-name starting with "Japanese ".
+      * --language en forbids both prefixes.
+
+    Raises ValueError with a clear message; callers map that to a
+    non-zero exit. This is the first guard the nightly scraper relies
+    on for language segregation — see the W48B doc-block in
+    pokeprices_scraper_v8.py and seed_set_cards.py."""
+    if language == "jp":
+        if not console.startswith("Pokemon Japanese "):
+            raise ValueError(
+                f"--language jp requires --console to start with "
+                f"'Pokemon Japanese '. Got {console!r}."
+            )
+        if not set_name.startswith("Japanese "):
+            raise ValueError(
+                f"--language jp requires --set-name to start with "
+                f"'Japanese '. Got {set_name!r}."
+            )
+    else:  # en
+        if console.startswith("Pokemon Japanese "):
+            raise ValueError(
+                f"--language en forbids --console starting with "
+                f"'Pokemon Japanese '. Got {console!r}."
+            )
+        if set_name.startswith("Japanese "):
+            raise ValueError(
+                f"--language en forbids --set-name starting with "
+                f"'Japanese '. Got {set_name!r}."
+            )
+
+
+_JP_BATCH_RE = re.compile(r"^batch-japanese-(\d+)\.txt$", re.IGNORECASE)
+
+
+def choose_batch_file(language: str, batches_dir: str,
+                      explicit: str | None) -> str:
+    """Pick the batch file the --apply path should append to.
+
+    * `explicit` always wins.
+    * `language == 'en'` → batches/batch6.txt.
+    * `language == 'jp'` → the batch-japanese-N.txt with the fewest
+      non-empty lines in `batches_dir`. Ties break on the smaller N,
+      matching the "lowest number" rule in the task spec.
+
+    Raises FileNotFoundError when `language == 'jp'` and no JP batch
+    files exist — we would otherwise silently fall back to batch6.txt,
+    which would flow a Japanese set into the English pipeline."""
+    if explicit is not None:
+        return explicit
+    if language == "en":
+        return os.path.join(batches_dir, "batch6.txt")
+
+    candidates: list[tuple[int, int, str]] = []  # (line_count, N, path)
+    if not os.path.isdir(batches_dir):
+        raise FileNotFoundError(
+            f"batches directory not found: {batches_dir}"
+        )
+    for name in sorted(os.listdir(batches_dir)):
+        m = _JP_BATCH_RE.match(name)
+        if not m:
+            continue
+        path = os.path.join(batches_dir, name)
+        with open(path, "r", encoding="utf-8") as f:
+            count = sum(1 for line in f if line.strip())
+        candidates.append((count, int(m.group(1)), path))
+    if not candidates:
+        raise FileNotFoundError(
+            f"No batch-japanese-*.txt files under {batches_dir}; "
+            "cannot route a Japanese set."
+        )
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    return candidates[0][2]
+
+
 def _guard_apply(args) -> None:
     """--apply is for CI only, and only when the DB env vars are set."""
     if not args.apply:
@@ -685,6 +769,43 @@ def _guard_apply(args) -> None:
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
+
+    # Language / name-prefix consistency. Caught before --apply guard
+    # so an invalid dry run fails fast too — the same mistake would
+    # otherwise burn a Supabase round-trip in CI and (worse) leave a
+    # polluted batch file behind.
+    try:
+        validate_language_name_consistency(args.language, args.console, args.set_name)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 7
+
+    # Resolve the batch file BEFORE we start work so the report (and
+    # the CI commit step) agree on the target path. On apply mode we
+    # need the JP batches directory to exist; on dry-run we tolerate
+    # its absence — print rather than crash.
+    try:
+        batches_dir = os.path.dirname(args.batch_file) if args.batch_file \
+            else os.path.join(REPO_ROOT, "batches")
+        chosen_batch = choose_batch_file(args.language, batches_dir, args.batch_file)
+    except FileNotFoundError as e:
+        if args.apply:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 7
+        chosen_batch = None  # dry-run: report-only
+    args.batch_file = chosen_batch if chosen_batch is not None \
+        else os.path.join("batches", "batch6.txt")
+
+    # GitHub Actions step output so the commit step can stage the
+    # batch file this run actually chose rather than hard-coding
+    # batch6.txt. Normalised to forward slashes so the workflow's
+    # regex check works on both runners' path styles.
+    gh_output = os.environ.get("GITHUB_OUTPUT")
+    if gh_output:
+        normalised = args.batch_file.replace(os.sep, "/")
+        with open(gh_output, "a", encoding="utf-8") as f:
+            f.write(f"batch_file={normalised}\n")
+
     _guard_apply(args)
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")

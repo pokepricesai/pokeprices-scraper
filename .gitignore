@@ -35,3 +35,7 @@ jungle.txt
 .onboard_tmp/
 onboard-dry-run-*.txt
 onboard-diff.txt
+onboard-diff-*.txt
+
+# detect_new_sets.py report
+detect-report.txt

@@ -531,5 +531,141 @@ class TestCompletenessGuard(unittest.TestCase):
         self.assertEqual(reasons, [])
 
 
+class TestLanguageNameConsistency(unittest.TestCase):
+    """validate_language_name_consistency refuses mislabelled runs
+    before they can touch PriceCharting or the DB."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+
+    def test_jp_pair_accepted(self):
+        self.onboard.validate_language_name_consistency(
+            "jp", "Pokemon Japanese Storm Emeralda", "Japanese Storm Emeralda",
+        )
+
+    def test_en_pair_accepted(self):
+        self.onboard.validate_language_name_consistency(
+            "en", "Pokemon Delta Reign", "Delta Reign",
+        )
+
+    def test_jp_console_without_japanese_prefix_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            self.onboard.validate_language_name_consistency(
+                "jp", "Pokemon Storm Emeralda", "Japanese Storm Emeralda",
+            )
+        self.assertIn("Pokemon Japanese", str(cm.exception))
+
+    def test_jp_set_name_without_japanese_prefix_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            self.onboard.validate_language_name_consistency(
+                "jp", "Pokemon Japanese Storm Emeralda", "Storm Emeralda",
+            )
+        self.assertIn("Japanese", str(cm.exception))
+
+    def test_en_console_with_japanese_prefix_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            self.onboard.validate_language_name_consistency(
+                "en", "Pokemon Japanese Storm Emeralda", "Storm Emeralda",
+            )
+        self.assertIn("forbids", str(cm.exception))
+
+    def test_en_set_name_with_japanese_prefix_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            self.onboard.validate_language_name_consistency(
+                "en", "Pokemon Delta Reign", "Japanese Delta Reign",
+            )
+        self.assertIn("forbids", str(cm.exception))
+
+
+class TestChooseBatchFile(unittest.TestCase):
+    """choose_batch_file picks the right file per --language and
+    tie-breaks consistently."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.onboard = _load("onboard_new_set", "onboard_new_set.py")
+
+    def _batches_dir(self, tmp: str, counts: dict[str, int]) -> str:
+        """Build a batches/ directory with the given per-file non-empty
+        line counts."""
+        d = os.path.join(tmp, "batches")
+        os.mkdir(d)
+        for filename, n in counts.items():
+            with open(os.path.join(d, filename), "w", encoding="utf-8", newline="\n") as f:
+                for i in range(n):
+                    f.write(f"Pokemon Dummy {i}\n")
+        return d
+
+    def test_explicit_batch_file_always_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._batches_dir(tmp, {"batch6.txt": 1,
+                                        "batch-japanese-1.txt": 1,
+                                        "batch-japanese-2.txt": 1})
+            self.assertEqual(
+                self.onboard.choose_batch_file("jp", d, explicit="batches/custom.txt"),
+                "batches/custom.txt",
+            )
+
+    def test_english_always_picks_batch6(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._batches_dir(tmp, {"batch6.txt": 10,
+                                        "batch-japanese-1.txt": 0})
+            chosen = self.onboard.choose_batch_file("en", d, None)
+            self.assertTrue(chosen.endswith("batch6.txt"))
+
+    def test_japanese_picks_least_populated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._batches_dir(tmp, {
+                "batch-japanese-1.txt": 20,
+                "batch-japanese-2.txt": 5,   # smallest
+                "batch-japanese-3.txt": 10,
+                "batch-japanese-4.txt": 15,
+                "batch-japanese-5.txt": 25,
+            })
+            chosen = self.onboard.choose_batch_file("jp", d, None)
+            self.assertTrue(chosen.endswith("batch-japanese-2.txt"))
+
+    def test_japanese_tie_breaks_on_lowest_number(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._batches_dir(tmp, {
+                "batch-japanese-1.txt": 7,
+                "batch-japanese-2.txt": 7,
+                "batch-japanese-3.txt": 7,
+            })
+            chosen = self.onboard.choose_batch_file("jp", d, None)
+            self.assertTrue(chosen.endswith("batch-japanese-1.txt"))
+
+    def test_japanese_ignores_english_batch_files(self):
+        # A badly-named "batch6.txt" with zero lines must not win —
+        # routing must stay inside the Japanese pipeline.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._batches_dir(tmp, {
+                "batch6.txt": 0,
+                "batch-japanese-1.txt": 999,
+            })
+            chosen = self.onboard.choose_batch_file("jp", d, None)
+            self.assertTrue(chosen.endswith("batch-japanese-1.txt"))
+
+    def test_raises_when_no_japanese_batches_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self._batches_dir(tmp, {"batch6.txt": 1})
+            with self.assertRaises(FileNotFoundError):
+                self.onboard.choose_batch_file("jp", d, None)
+
+    def test_blank_lines_are_not_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = os.path.join(tmp, "batches")
+            os.mkdir(d)
+            # File A: 2 content lines + several blanks (count = 2).
+            # File B: 3 content lines, no blanks (count = 3).
+            with open(os.path.join(d, "batch-japanese-1.txt"), "w", newline="\n") as f:
+                f.write("Pokemon A\n\n\nPokemon B\n\n")
+            with open(os.path.join(d, "batch-japanese-2.txt"), "w", newline="\n") as f:
+                f.write("Pokemon C\nPokemon D\nPokemon E\n")
+            chosen = self.onboard.choose_batch_file("jp", d, None)
+            self.assertTrue(chosen.endswith("batch-japanese-1.txt"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
