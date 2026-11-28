@@ -650,7 +650,13 @@ def _parse_args(argv=None):
                    help="Optional full card count including secret rares.")
     p.add_argument("--tcg-set-code", default=None,
                    help="Optional TCG set code for the DB cross-check.")
-    p.add_argument("--batch-file", default=os.path.join("batches", "batch6.txt"))
+    p.add_argument("--batch-file", default=None,
+                   help="Batch file to append to with --apply. When omitted, "
+                        "the choice depends on --language: 'en' uses "
+                        "batches/batch6.txt; 'jp' picks the "
+                        "batches/batch-japanese-*.txt with the fewest "
+                        "non-empty lines (tie: lowest numeric suffix). An "
+                        "explicit value always wins.")
     p.add_argument("--out-dir", default="pc_csvs",
                    help="Where to write the generated CSV. In dry-run mode "
                         "a git-ignored temp folder is used instead.")
@@ -666,7 +672,153 @@ def _parse_args(argv=None):
                         "flag is the only way to seed a listing whose "
                         "coverage falls short of --expected-cards or has "
                         "more than 10 gap numbers.")
+    p.add_argument("--min-rows", type=int, default=50,
+                   help="Hard-fail threshold for the row-count sanity "
+                        "check. Default 50 catches partial PriceCharting "
+                        "responses for standard sets; drop to ~10 for "
+                        "small official promo sets (e.g. McDonald's). "
+                        "Must be at least 5.")
     return p.parse_args(argv)
+
+
+def validate_language_name_consistency(language: str, console: str,
+                                        set_name: str) -> None:
+    """Refuse a mislabelled onboarding before any PriceCharting request:
+      * --language jp requires console starting with "Pokemon Japanese "
+        AND --set-name starting with "Japanese ".
+      * --language en forbids both prefixes.
+
+    Raises ValueError with a clear message; callers map that to a
+    non-zero exit. This is the first guard the nightly scraper relies
+    on for language segregation — see the W48B doc-block in
+    pokeprices_scraper_v8.py and seed_set_cards.py."""
+    if language == "jp":
+        if not console.startswith("Pokemon Japanese "):
+            raise ValueError(
+                f"--language jp requires --console to start with "
+                f"'Pokemon Japanese '. Got {console!r}."
+            )
+        if not set_name.startswith("Japanese "):
+            raise ValueError(
+                f"--language jp requires --set-name to start with "
+                f"'Japanese '. Got {set_name!r}."
+            )
+    else:  # en
+        if console.startswith("Pokemon Japanese "):
+            raise ValueError(
+                f"--language en forbids --console starting with "
+                f"'Pokemon Japanese '. Got {console!r}."
+            )
+        if set_name.startswith("Japanese "):
+            raise ValueError(
+                f"--language en forbids --set-name starting with "
+                f"'Japanese '. Got {set_name!r}."
+            )
+
+
+_JP_BATCH_RE = re.compile(r"^batch-japanese-(\d+)\.txt$", re.IGNORECASE)
+
+# Same shape the workflow commit step enforces. Any batch path the
+# script emits — whether auto-chosen or passed in via --batch-file —
+# has to match this before the script will do any real work.
+BATCH_PATH_RE = re.compile(r"^batches/[A-Za-z0-9._-]+\.txt$")
+
+
+def validate_repo_relative_batch_path(path: str) -> None:
+    """Raise ValueError when `path` is not a repo-relative
+    batches/<name>.txt. The workflow's commit step enforces the same
+    regex — we enforce it in-process too so a buggy auto-selection or
+    a hand-typed --batch-file cannot survive past validation and into
+    the seeder step (which would write cards to the DB and leave the
+    commit step to fail)."""
+    if not isinstance(path, str) or not BATCH_PATH_RE.match(path):
+        raise ValueError(
+            f"Batch file path must be repo-relative and match "
+            f"^batches/[A-Za-z0-9._-]+\\.txt$. Got {path!r}."
+        )
+
+
+def validate_explicit_batch_matches_language(language: str,
+                                              explicit_path: str) -> None:
+    """When an operator passes --batch-file explicitly, require that
+    the filename line up with --language:
+      * --language en forbids batches/batch-japanese-*.txt
+      * --language jp requires batches/batch-japanese-*.txt
+    Preserves the language segregation the nightly scraper's language
+    tagging depends on (see W48B commentary in seed_set_cards.py)."""
+    basename = os.path.basename(explicit_path.replace("\\", "/"))
+    is_jp_batch = _JP_BATCH_RE.match(basename) is not None
+    if language == "en" and is_jp_batch:
+        raise ValueError(
+            f"--language en forbids a batch file whose name starts "
+            f"'batch-japanese-'. Got {explicit_path!r}."
+        )
+    if language == "jp" and not is_jp_batch:
+        raise ValueError(
+            f"--language jp requires a batch file whose name starts "
+            f"'batch-japanese-'. Got {explicit_path!r}."
+        )
+
+
+def _repo_relative(path: str, repo_root: str) -> str:
+    """Return `path` as 'batches/<name>.txt' (forward slashes, relative
+    to repo_root). Idempotent when already relative. Backslashes are
+    collapsed to forward slashes so Windows local runs emit the same
+    shape as CI."""
+    p = path.replace("\\", "/")
+    if os.path.isabs(p):
+        root = repo_root.replace("\\", "/").rstrip("/") + "/"
+        if p.startswith(root):
+            p = p[len(root):]
+        else:
+            # Fall back to just the tail; validate_repo_relative_batch_path
+            # will reject anything suspicious.
+            p = os.path.relpath(p, repo_root).replace("\\", "/")
+    return p
+
+
+def choose_batch_file(language: str, repo_root: str,
+                      explicit: str | None,
+                      batches_subdir: str = "batches") -> str:
+    """Pick the batch file the --apply path should append to. Returns
+    a repo-relative forward-slash path (e.g. 'batches/batch6.txt') so
+    the workflow commit step and the GITHUB_OUTPUT emission agree on
+    exactly one path shape.
+
+      * `explicit` always wins, but is normalised to repo-relative.
+      * `language == 'en'` → batches/batch6.txt.
+      * `language == 'jp'` → the batch-japanese-N.txt with the fewest
+        non-empty lines under `repo_root/batches_subdir`. Ties break
+        on the smaller N.
+
+    Raises FileNotFoundError when `language == 'jp'` and no JP batch
+    files exist — we would otherwise silently fall back to batch6.txt,
+    which would flow a Japanese set into the English pipeline."""
+    if explicit is not None:
+        return _repo_relative(explicit, repo_root)
+    if language == "en":
+        return f"{batches_subdir}/batch6.txt"
+
+    batches_dir = os.path.join(repo_root, batches_subdir)
+    if not os.path.isdir(batches_dir):
+        raise FileNotFoundError(
+            f"batches directory not found: {batches_dir}"
+        )
+    candidates: list[tuple[int, int, str]] = []  # (line_count, N, filename)
+    for name in sorted(os.listdir(batches_dir)):
+        m = _JP_BATCH_RE.match(name)
+        if not m:
+            continue
+        with open(os.path.join(batches_dir, name), "r", encoding="utf-8") as f:
+            count = sum(1 for line in f if line.strip())
+        candidates.append((count, int(m.group(1)), name))
+    if not candidates:
+        raise FileNotFoundError(
+            f"No batch-japanese-*.txt files under {batches_dir}; "
+            "cannot route a Japanese set."
+        )
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    return f"{batches_subdir}/{candidates[0][2]}"
 
 
 def _guard_apply(args) -> None:
@@ -685,6 +837,71 @@ def _guard_apply(args) -> None:
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
+
+    # --min-rows floor. 5 is the smallest we will accept — below that
+    # a legitimate PriceCharting result is almost certainly a mistake.
+    if args.min_rows < 5:
+        print(f"ERROR: --min-rows must be at least 5. Got {args.min_rows}.",
+              file=sys.stderr)
+        return 7
+
+    # Language / name-prefix consistency. Caught before --apply guard
+    # so an invalid dry run fails fast too — the same mistake would
+    # otherwise burn a Supabase round-trip in CI and (worse) leave a
+    # polluted batch file behind.
+    try:
+        validate_language_name_consistency(args.language, args.console, args.set_name)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 7
+
+    # If --batch-file was given explicitly, require it to line up with
+    # --language. Caught before resolution so --apply cannot slip a
+    # Japanese set past the English pipeline (or vice versa).
+    explicit_batch = args.batch_file
+    if explicit_batch is not None:
+        try:
+            validate_explicit_batch_matches_language(args.language, explicit_batch)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 7
+
+    # Resolve the batch file BEFORE we start work so the report (and
+    # the CI commit step) agree on the target path. On apply mode we
+    # need the JP batches directory to exist; on dry-run we tolerate
+    # its absence — print rather than crash.
+    chosen_batch: str | None
+    try:
+        chosen_batch = choose_batch_file(args.language, REPO_ROOT, explicit_batch)
+    except FileNotFoundError as e:
+        if args.apply:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 7
+        chosen_batch = None  # dry-run: report-only
+    args.batch_file = chosen_batch if chosen_batch is not None \
+        else "batches/batch6.txt"
+
+    # Validate the path matches the repo-relative shape the workflow
+    # commit step enforces. Auto-selected paths are always validated;
+    # an explicit path is validated too whenever --apply is on (a
+    # stricter check than needed for dry-run but matches the spec).
+    must_validate = (explicit_batch is None) or args.apply
+    if must_validate:
+        try:
+            validate_repo_relative_batch_path(args.batch_file)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 7
+
+    # GitHub Actions step output so the commit step can stage the
+    # batch file this run actually chose rather than hard-coding
+    # batch6.txt. choose_batch_file already returned a repo-relative
+    # forward-slash path so this is a straight write.
+    gh_output = os.environ.get("GITHUB_OUTPUT")
+    if gh_output:
+        with open(gh_output, "a", encoding="utf-8") as f:
+            f.write(f"batch_file={args.batch_file}\n")
+
     _guard_apply(args)
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
@@ -750,10 +967,11 @@ def main(argv=None) -> int:
 
     # 4) Cross-checks
     warnings: list[str] = []
-    if cls["total"] < 50:
+    if cls["total"] < args.min_rows:
         msg = (f"HARD FAIL: only {cls['total']} rows returned. "
-               "PriceCharting listings for a brand-new Pokémon set normally "
-               "have >= 50 rows. Aborting before seeder.")
+               f"Below --min-rows threshold ({args.min_rows}). Pass a lower "
+               "--min-rows for small official promo sets (e.g. McDonald's, "
+               "typically ~15 rows). Aborting before seeder.")
         warnings.append(msg)
         report.append(msg)
     if cls["duplicate_ids"]:
@@ -814,7 +1032,7 @@ def main(argv=None) -> int:
             report.append(f"  * {w}")
         report.append("")
 
-    hard_fail = cls["total"] < 50 or bool(cls["duplicate_ids"])
+    hard_fail = cls["total"] < args.min_rows or bool(cls["duplicate_ids"])
     if hard_fail:
         report.append("Aborting before seeder due to HARD FAIL above.")
         write_report(args.report, banner + report)
@@ -845,10 +1063,15 @@ def main(argv=None) -> int:
     report.append("")
 
     # 6) --apply tail
+    # args.batch_file is a repo-relative forward-slash path; resolve
+    # it against REPO_ROOT for file operations so callers can run from
+    # any CWD.
+    batch_abs = args.batch_file if os.path.isabs(args.batch_file) \
+        else os.path.join(REPO_ROOT, args.batch_file.replace("/", os.sep))
     if args.apply:
         # Write CSV to pc_csvs/ (we already wrote to out_dir which == pc_csvs/)
         # Append batch file
-        append_status = append_console_to_batch(args.batch_file, args.console)
+        append_status = append_console_to_batch(batch_abs, args.console)
         report.append(f"Batch file:        {args.batch_file}  [{append_status}]")
         # Run seeder for real
         rc, out = run_seeder(csv_path, args, dry_run=False)
@@ -867,8 +1090,8 @@ def main(argv=None) -> int:
         report.append(f"  * Move the CSV into {args.out_dir}/{csv_basename}")
         report.append(f"  * Run seed_set_cards.py --require-console {args.console!r} for real")
         existing_batch = ""
-        if os.path.exists(args.batch_file):
-            with open(args.batch_file, "r", encoding="utf-8") as f:
+        if os.path.exists(batch_abs):
+            with open(batch_abs, "r", encoding="utf-8") as f:
                 existing_batch = f.read()
         would_append = args.console not in existing_batch.splitlines()
         report.append(f"  * Append {args.console!r} to {args.batch_file} "

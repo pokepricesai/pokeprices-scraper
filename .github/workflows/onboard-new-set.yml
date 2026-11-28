@@ -47,6 +47,10 @@ on:
         required: false
         default: false
         type: boolean
+      min_rows:
+        description: 'Hard-fail threshold for the row-count sanity check. Default 50. Lower (e.g. 10) for small official promo sets such as McDonald''s. Must be at least 5.'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -94,6 +98,7 @@ jobs:
           INPUT_TCG_SET_CODE: ${{ inputs.tcg_set_code }}
           INPUT_APPLY: ${{ inputs.apply }}
           INPUT_ALLOW_INCOMPLETE: ${{ inputs.allow_incomplete }}
+          INPUT_MIN_ROWS: ${{ inputs.min_rows }}
         run: |
           set -euo pipefail
           ARGS=(
@@ -115,6 +120,9 @@ jobs:
           fi
           if [ "$INPUT_ALLOW_INCOMPLETE" = "true" ]; then
             ARGS+=(--allow-incomplete)
+          fi
+          if [ -n "$INPUT_MIN_ROWS" ]; then
+            ARGS+=(--min-rows "$INPUT_MIN_ROWS")
           fi
           python onboard_new_set.py "${ARGS[@]}"
 
@@ -143,13 +151,26 @@ jobs:
           INPUT_SET_NAME: ${{ inputs.set_name }}
           INPUT_RELEASE_DATE: ${{ inputs.release_date }}
           BRANCH_REF: ${{ github.ref_name }}
+          BATCH_FILE_FROM_SCRIPT: ${{ steps.onboard.outputs.batch_file }}
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           CSV_PATH="pc_csvs/${INPUT_CONSOLE_NAME}.csv"
-          BATCH_FILE="batches/batch6.txt"
+          BATCH_FILE="$BATCH_FILE_FROM_SCRIPT"
+
+          # Belt-and-braces: validate the batch file path the Python
+          # step emitted BEFORE we hand it to git. Only paths that look
+          # like batches/<something>.txt are allowed — no absolute
+          # paths, no '..', no shell meta-characters, no leading '-'.
+          # Script output could in principle be tampered with by a
+          # future bug elsewhere; this check keeps the commit step
+          # safe regardless.
+          if ! printf '%s' "$BATCH_FILE" | grep -Eq '^batches/[A-Za-z0-9._-]+\.txt$'; then
+            echo "Refusing to stage suspicious batch path: '$BATCH_FILE'" >&2
+            exit 1
+          fi
 
           # Stage ONLY the two files this job may have changed — never
           # use `git add .` so a stray artifact cannot leak into the

@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+Trimmed fixture used by tests/test_detect_new_sets.py. Mirrors the
+real https://www.pricecharting.com/category/pokemon-cards page in all
+the places our parser touches:
+
+  * <title> contains "Pokemon" so looks_like_category_page returns True
+  * "New Releases" sidebar lists a short-label anchor with a canonical
+    title= attribute — the parser must prefer the title when it starts
+    with "Pokemon" over the short inner text.
+  * Main listing <ul> contains:
+      - an English set with a matching title (Delta Reign)
+      - a Japanese set whose href percent-encodes an apostrophe
+      - a Japanese set (Storm Emeralda) that's missing from batches
+      - a Chinese set that must be silently skipped by compare()
+      - a Japanese Premium Deck variant whose SLUG differs from the
+        base set — both should be surfaced as distinct consoles.
+-->
+<html>
+<head><title>Pokemon Card Prices | PSA &amp; Ungraded Price Guide</title></head>
+<body>
+<h2 class="newest">New Releases: Pokemon Card Sets</h2>
+<ul class="newest">
+    <li>
+        <a href="/console/pokemon-mcdonalds-2026" title="Pokemon McDonalds 2026">McDonalds 2026</a>
+    </li>
+</ul>
+
+<ul class="main-list">
+    <li><a href="/console/pokemon-base-set" title="Pokemon Base Set">Pokemon Base Set</a></li>
+    <li><a href="/console/pokemon-mcdonalds-2026" title="Pokemon McDonalds 2026">Pokemon McDonalds 2026</a></li>
+    <li><a href="/console/pokemon-delta-reign" title="Pokemon Delta Reign">Pokemon Delta Reign</a></li>
+    <li><a href="/console/pokemon-japanese-2002-mcdonald%27s">Pokemon Japanese 2002 McDonald&#39;s</a></li>
+    <li><a href="/console/pokemon-japanese-storm-emeralda" title="Pokemon Japanese Storm Emeralda">Pokemon Japanese Storm Emeralda</a></li>
+    <li><a href="/console/pokemon-japanese-30th-celebration" title="Pokemon Japanese 30th Celebration">Pokemon Japanese 30th Celebration</a></li>
+    <li><a href="/console/pokemon-japanese-30th-celebration-premium-deck" title="Pokemon Japanese 30th Celebration Premium Deck">Pokemon Japanese 30th Celebration Premium Deck</a></li>
+    <li><a href="/console/pokemon-chinese-gem-pack-7" title="Pokemon Chinese Gem Pack 7">Pokemon Chinese Gem Pack 7</a></li>
+</ul>
+</body>
+</html>
